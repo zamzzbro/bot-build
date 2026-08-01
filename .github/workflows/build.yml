@@ -37,33 +37,22 @@ jobs:
 
       - name: Download Project ZIP
         run: |
-          echo "Downloading: ${{ github.event.inputs.zip_url }}"
           wget -O project.zip --timeout=300 --tries=3 "${{ github.event.inputs.zip_url }}"
-          ZIP_SIZE=$(stat -c%s project.zip)
-          echo "Downloaded: $((ZIP_SIZE/1048576)) MB"
+          echo "Downloaded $(stat -c%s project.zip) bytes"
 
       - name: Extract Project
         run: |
           mkdir -p project_extract
           unzip -q project.zip -d project_extract || unzip -o project.zip -d project_extract
-          echo "Extracted:"
           find project_extract -maxdepth 3 -type f | head -40
 
       - name: Detect Project Root
         id: detect
         run: |
           PROJECT_TYPE="${{ github.event.inputs.project_type }}"
-          if [ "$PROJECT_TYPE" = "flutter" ]; then
-            TARGET_FILE="pubspec.yaml"
-          else
-            TARGET_FILE="build.gradle"
-          fi
+          if [ "$PROJECT_TYPE" = "flutter" ]; then TARGET_FILE="pubspec.yaml"; else TARGET_FILE="build.gradle"; fi
           FOUND=$(find project_extract -name "$TARGET_FILE" -maxdepth 4 | head -1)
-          if [ -z "$FOUND" ]; then
-            echo "ERROR: $TARGET_FILE tidak ditemukan!"
-            find project_extract -maxdepth 4 | head -50
-            exit 1
-          fi
+          if [ -z "$FOUND" ]; then echo "ERROR: $TARGET_FILE not found"; find project_extract -maxdepth 4 | head -50; exit 1; fi
           PROJECT_ROOT=$(dirname "$FOUND")
           echo "Project root: $PROJECT_ROOT"
           echo "PROJECT_ROOT=$PROJECT_ROOT" >> $GITHUB_OUTPUT
@@ -83,34 +72,21 @@ jobs:
         run: |
           BUILD_TYPE="${{ github.event.inputs.build_type }}"
           flutter pub get 2>&1 | tee /tmp/pub_get.log
-          if [ $? -ne 0 ]; then
-            echo "ERROR: flutter pub get gagal"
-            exit 1
-          fi
+          if [ $? -ne 0 ]; then echo "flutter pub get gagal"; exit 1; fi
           if [ "$BUILD_TYPE" = "release" ]; then
             flutter build apk --release --no-tree-shake-icons 2>&1 | tee /tmp/build.log
           else
             flutter build apk --debug 2>&1 | tee /tmp/build.log
           fi
-          if [ $? -ne 0 ]; then
-            echo "ERROR: Flutter build gagal"
-            exit 1
-          fi
+          if [ $? -ne 0 ]; then echo "Flutter build gagal"; exit 1; fi
           APK_PATH=$(find . -name "*.apk" | grep -v unsigned | head -1)
-          if [ -z "$APK_PATH" ]; then
-            APK_PATH=$(find . -name "*.apk" | head -1)
-          fi
-          if [ -z "$APK_PATH" ]; then
-            echo "ERROR: APK tidak ditemukan!"
-            exit 1
-          fi
-          APK_SIZE=$(stat -c%s "$APK_PATH")
-          APK_SIZE_MB=$(echo "scale=2; $APK_SIZE/1048576" | bc)
+          if [ -z "$APK_PATH" ]; then APK_PATH=$(find . -name "*.apk" | head -1); fi
+          if [ -z "$APK_PATH" ]; then echo "APK tidak ditemukan"; exit 1; fi
           APK_ABS=$(realpath "$APK_PATH")
+          APK_SIZE_MB=$(echo "scale=2; $(stat -c%s $APK_ABS)/1048576" | bc)
           echo "APK_PATH=$APK_ABS" >> $GITHUB_OUTPUT
           echo "APK_SIZE_MB=$APK_SIZE_MB" >> $GITHUB_OUTPUT
           echo "APK_NAME=$(basename $APK_ABS)" >> $GITHUB_OUTPUT
-          echo "Done: $APK_ABS ($APK_SIZE_MB MB)"
 
       - name: Build Android APK
         if: ${{ github.event.inputs.project_type == 'android' }}
@@ -120,43 +96,19 @@ jobs:
           ANDROID_HOME: /usr/local/lib/android/sdk
         run: |
           BUILD_TYPE="${{ github.event.inputs.build_type }}"
-          if [ -f "gradlew" ]; then
-            chmod +x gradlew
-            GRADLE_CMD="./gradlew"
-          else
-            GRADLE_CMD="gradle"
-          fi
+          if [ -f "gradlew" ]; then chmod +x gradlew && GRADLE_CMD="./gradlew"; else GRADLE_CMD="gradle"; fi
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses 2>/dev/null || true
-          if [ "$BUILD_TYPE" = "release" ]; then
-            BUILD_TASK="assembleRelease"
-          else
-            BUILD_TASK="assembleDebug"
-          fi
-          $GRADLE_CMD $BUILD_TASK \
-            --no-daemon \
-            --stacktrace \
-            -Dfile.encoding=UTF-8 \
-            -Dorg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=1g" \
-            2>&1 | tee /tmp/build.log
-          if [ $? -ne 0 ]; then
-            echo "ERROR: Gradle build gagal"
-            exit 1
-          fi
+          if [ "$BUILD_TYPE" = "release" ]; then BUILD_TASK="assembleRelease"; else BUILD_TASK="assembleDebug"; fi
+          $GRADLE_CMD $BUILD_TASK --no-daemon --stacktrace -Dfile.encoding=UTF-8 -Dorg.gradle.jvmargs="-Xmx4g" 2>&1 | tee /tmp/build.log
+          if [ $? -ne 0 ]; then echo "Gradle build gagal"; exit 1; fi
           APK_PATH=$(find . -path "*/outputs/apk/$BUILD_TYPE/*.apk" | head -1)
-          if [ -z "$APK_PATH" ]; then
-            APK_PATH=$(find . -name "*.apk" | head -1)
-          fi
-          if [ -z "$APK_PATH" ]; then
-            echo "ERROR: APK tidak ditemukan!"
-            exit 1
-          fi
-          APK_SIZE=$(stat -c%s "$APK_PATH")
-          APK_SIZE_MB=$(echo "scale=2; $APK_SIZE/1048576" | bc)
+          if [ -z "$APK_PATH" ]; then APK_PATH=$(find . -name "*.apk" | head -1); fi
+          if [ -z "$APK_PATH" ]; then echo "APK tidak ditemukan"; exit 1; fi
           APK_ABS=$(realpath "$APK_PATH")
+          APK_SIZE_MB=$(echo "scale=2; $(stat -c%s $APK_ABS)/1048576" | bc)
           echo "APK_PATH=$APK_ABS" >> $GITHUB_OUTPUT
           echo "APK_SIZE_MB=$APK_SIZE_MB" >> $GITHUB_OUTPUT
           echo "APK_NAME=$(basename $APK_ABS)" >> $GITHUB_OUTPUT
-          echo "Done: $APK_ABS ($APK_SIZE_MB MB)"
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
@@ -174,15 +126,23 @@ jobs:
           CHAT_ID="${{ github.event.inputs.chat_id }}"
           BOT_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}"
           RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          APK_SIZE_MB="${{ steps.flutter_build.outputs.APK_SIZE_MB }}${{ steps.android_build.outputs.APK_SIZE_MB }}"
+          APK_SIZE="${{ steps.flutter_build.outputs.APK_SIZE_MB }}${{ steps.android_build.outputs.APK_SIZE_MB }}"
           APK_NAME="${{ steps.flutter_build.outputs.APK_NAME }}${{ steps.android_build.outputs.APK_NAME }}"
-          PROJECT_TYPE="${{ github.event.inputs.project_type }}"
-          BUILD_TYPE="${{ github.event.inputs.build_type }}"
-          TEXT="Build Selesai! Type: ${PROJECT_TYPE} | Build: ${BUILD_TYPE} | APK: ${APK_NAME} | Size: ${APK_SIZE_MB} MB | Bot sedang download dan kirim APK... | Log: ${RUN_URL}"
-          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-            -d "chat_id=${CHAT_ID}" \
-            -d "text=${TEXT}" \
-            -d "parse_mode=HTML"
+          TEXT="Build Selesai! APK: ${APK_NAME} | Size: ${APK_SIZE} MB | Bot sedang kirim APK ke kamu... | Log: ${RUN_URL}"
+          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" -d "chat_id=${CHAT_ID}" -d "text=${TEXT}"
+
+      - name: Collect Error Log
+        if: failure()
+        run: |
+          LOG_FILE="/tmp/build_error_log.txt"
+          echo "=== BUILD ERROR LOG ===" > $LOG_FILE
+          echo "Date: $(date)" >> $LOG_FILE
+          echo "Type: ${{ github.event.inputs.project_type }} | Build: ${{ github.event.inputs.build_type }}" >> $LOG_FILE
+          echo "Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> $LOG_FILE
+          echo "" >> $LOG_FILE
+          if [ -f "/tmp/build.log" ]; then echo "=== BUILD LOG ===" >> $LOG_FILE && cat /tmp/build.log >> $LOG_FILE; fi
+          if [ -f "/tmp/pub_get.log" ]; then echo "=== PUB GET LOG ===" >> $LOG_FILE && cat /tmp/pub_get.log >> $LOG_FILE; fi
+          echo "Log saved: $(wc -l < $LOG_FILE) lines"
 
       - name: Notify Telegram Failure
         if: failure()
@@ -190,32 +150,9 @@ jobs:
           CHAT_ID="${{ github.event.inputs.chat_id }}"
           BOT_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}"
           RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          PROJECT_TYPE="${{ github.event.inputs.project_type }}"
-          BUILD_TYPE="${{ github.event.inputs.build_type }}"
-          FULL_LOG="/tmp/build_error_log.txt"
-          echo "BUILD ERROR LOG" > $FULL_LOG
-          echo "Date: $(date)" >> $FULL_LOG
-          echo "Type: $PROJECT_TYPE | Build: $BUILD_TYPE" >> $FULL_LOG
-          echo "Run: $RUN_URL" >> $FULL_LOG
-          echo "" >> $FULL_LOG
-          if [ -f "/tmp/build.log" ]; then
-            echo "=== BUILD LOG ===" >> $FULL_LOG
-            cat /tmp/build.log >> $FULL_LOG
-          fi
-          if [ -f "/tmp/pub_get.log" ]; then
-            echo "=== PUB GET LOG ===" >> $FULL_LOG
-            cat /tmp/pub_get.log >> $FULL_LOG
-          fi
-          ERROR_SNIPPET=$(grep -E "Error|error:|Exception|FAILED|BUILD FAILED" /tmp/build.log 2>/dev/null | tail -15 | tr '\n' ' ' | cut -c1-500 || echo "Cek log lengkap")
-          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-            -d "chat_id=${CHAT_ID}" \
-            --data-urlencode "text=Build Gagal! (${PROJECT_TYPE} ${BUILD_TYPE})
-
-Error: ${ERROR_SNIPPET}
-
-Log lengkap: ${RUN_URL}" \
-            -d "parse_mode=HTML"
-          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument" \
-            -F "chat_id=${CHAT_ID}" \
-            -F "document=@${FULL_LOG}" \
-            -F "caption=Full Error Log - ${PROJECT_TYPE} ${BUILD_TYPE}" || true
+          TYPE="${{ github.event.inputs.project_type }}"
+          BUILD="${{ github.event.inputs.build_type }}"
+          SNIPPET=$(grep -E "error:|Error|FAILED|Exception" /tmp/build.log 2>/dev/null | tail -10 | tr '\n' ' ' | cut -c1-300 || echo "cek log")
+          TEXT="Build Gagal! (${TYPE} ${BUILD}) | Error: ${SNIPPET} | Log lengkap: ${RUN_URL}"
+          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" -d "chat_id=${CHAT_ID}" -d "text=${TEXT}"
+          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument" -F "chat_id=${CHAT_ID}" -F "document=@/tmp/build_error_log.txt" -F "caption=Full Error Log" || true
