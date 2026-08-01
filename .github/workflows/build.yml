@@ -1,98 +1,74 @@
 name: Build APK
 
-# ─── Trigger: hanya via workflow_dispatch (dipanggil oleh bot) ───
 on:
   workflow_dispatch:
     inputs:
       zip_url:
-        description: 'URL download project ZIP (dari bot server)'
+        description: 'URL download project ZIP'
         required: true
       project_type:
-        description: 'Tipe project: flutter atau android'
+        description: 'flutter atau android'
         required: true
         default: 'android'
       build_type:
-        description: 'Tipe build: debug atau release'
+        description: 'debug atau release'
         required: true
         default: 'debug'
       chat_id:
-        description: 'Telegram Chat ID user'
+        description: 'Telegram Chat ID'
         required: true
       message_id:
-        description: 'Telegram Message ID (untuk di-edit bot)'
+        description: 'Telegram Message ID'
         required: false
         default: '0'
 
 jobs:
   build:
-    name: Build ${{ github.event.inputs.project_type }} APK (${{ github.event.inputs.build_type }})
+    name: Build APK
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
     steps:
-      # ─── 1. Setup Java 17 (wajib untuk Android/Flutter) ───
-      - name: ☕ Setup Java 17
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      # ─── 2. Download project ZIP dari bot server ───
-      - name: 📥 Download Project ZIP
+      - name: Download Project ZIP
         run: |
-          echo "📥 Downloading from: ${{ github.event.inputs.zip_url }}"
-          wget -O project.zip \
-            --timeout=300 \
-            --tries=3 \
-            --progress=dot:mega \
-            "${{ github.event.inputs.zip_url }}"
+          echo "Downloading: ${{ github.event.inputs.zip_url }}"
+          wget -O project.zip --timeout=300 --tries=3 "${{ github.event.inputs.zip_url }}"
+          ZIP_SIZE=$(stat -c%s project.zip)
+          echo "Downloaded: $((ZIP_SIZE/1048576)) MB"
 
-          ZIP_SIZE=$(stat -c%s project.zip 2>/dev/null || stat -f%z project.zip)
-          ZIP_SIZE_MB=$(echo "scale=1; $ZIP_SIZE/1048576" | bc)
-          echo "✅ Downloaded: ${ZIP_SIZE_MB} MB"
-
-      # ─── 3. Extract ZIP ───
-      - name: 📦 Extract Project
+      - name: Extract Project
         run: |
           mkdir -p project_extract
-          unzip -q project.zip -d project_extract 2>&1 | head -20 || {
-            echo "::warning::Standard unzip failed, trying with -o flag..."
-            unzip -o project.zip -d project_extract
-          }
-
-          echo "📁 Extracted structure:"
+          unzip -q project.zip -d project_extract || unzip -o project.zip -d project_extract
+          echo "Extracted:"
           find project_extract -maxdepth 3 -type f | head -40
 
-      # ─── 4. Deteksi project root ───
-      - name: 🔍 Detect Project Root
+      - name: Detect Project Root
         id: detect
         run: |
           PROJECT_TYPE="${{ github.event.inputs.project_type }}"
-
           if [ "$PROJECT_TYPE" = "flutter" ]; then
             TARGET_FILE="pubspec.yaml"
           else
             TARGET_FILE="build.gradle"
           fi
-
-          echo "🔍 Looking for $TARGET_FILE ..."
-
-          # Cari di kedalaman max 4 level
-          FOUND=$(find project_extract -name "$TARGET_FILE" -maxdepth 4 2>/dev/null | head -1)
-
+          FOUND=$(find project_extract -name "$TARGET_FILE" -maxdepth 4 | head -1)
           if [ -z "$FOUND" ]; then
-            echo "::error::❌ File $TARGET_FILE tidak ditemukan di ZIP!"
-            echo "Struktur ZIP:"
+            echo "ERROR: $TARGET_FILE tidak ditemukan!"
             find project_extract -maxdepth 4 | head -50
             exit 1
           fi
-
           PROJECT_ROOT=$(dirname "$FOUND")
-          echo "✅ Project root: $PROJECT_ROOT"
+          echo "Project root: $PROJECT_ROOT"
           echo "PROJECT_ROOT=$PROJECT_ROOT" >> $GITHUB_OUTPUT
 
-      # ─── 5. Setup Flutter (HANYA jika flutter) ───
-      - name: 🐦 Setup Flutter
+      - name: Setup Flutter
         if: ${{ github.event.inputs.project_type == 'flutter' }}
         uses: subosito/flutter-action@v2
         with:
@@ -100,167 +76,115 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: 🐦 Flutter version check
-        if: ${{ github.event.inputs.project_type == 'flutter' }}
-        run: flutter --version
-
-      # ─── 6A. Build Flutter APK ───
-      - name: 🔨 Build Flutter APK
+      - name: Build Flutter APK
         if: ${{ github.event.inputs.project_type == 'flutter' }}
         id: flutter_build
         working-directory: ${{ steps.detect.outputs.PROJECT_ROOT }}
         run: |
           BUILD_TYPE="${{ github.event.inputs.build_type }}"
-
-          echo "📦 Getting Flutter dependencies..."
           flutter pub get 2>&1 | tee /tmp/pub_get.log
-          if [ ${PIPESTATUS[0]} -ne 0 ]; then
-            echo "::error::flutter pub get gagal!"
-            cat /tmp/pub_get.log
+          if [ $? -ne 0 ]; then
+            echo "ERROR: flutter pub get gagal"
             exit 1
           fi
-
-          echo "🔨 Building Flutter APK ($BUILD_TYPE)..."
           if [ "$BUILD_TYPE" = "release" ]; then
-            flutter build apk --release --no-tree-shake-icons 2>&1 | tee /tmp/flutter_build.log
+            flutter build apk --release --no-tree-shake-icons 2>&1 | tee /tmp/build.log
           else
-            flutter build apk --debug 2>&1 | tee /tmp/flutter_build.log
+            flutter build apk --debug 2>&1 | tee /tmp/build.log
           fi
-
-          BUILD_EXIT=${PIPESTATUS[0]}
-          if [ $BUILD_EXIT -ne 0 ]; then
-            echo "::error::Flutter build gagal!"
-            exit $BUILD_EXIT
+          if [ $? -ne 0 ]; then
+            echo "ERROR: Flutter build gagal"
+            exit 1
           fi
-
-          # Temukan APK
-          APK_PATH=$(find . -name "*.apk" | grep -v "unsigned" | head -1)
+          APK_PATH=$(find . -name "*.apk" | grep -v unsigned | head -1)
           if [ -z "$APK_PATH" ]; then
             APK_PATH=$(find . -name "*.apk" | head -1)
           fi
-
           if [ -z "$APK_PATH" ]; then
-            echo "::error::APK tidak ditemukan setelah build!"
-            find . -name "*.apk" -o -name "*.aab" | head -10
+            echo "ERROR: APK tidak ditemukan!"
             exit 1
           fi
-
-          APK_SIZE=$(stat -c%s "$APK_PATH" 2>/dev/null || stat -f%z "$APK_PATH")
+          APK_SIZE=$(stat -c%s "$APK_PATH")
           APK_SIZE_MB=$(echo "scale=2; $APK_SIZE/1048576" | bc)
           APK_ABS=$(realpath "$APK_PATH")
-
-          echo "✅ APK: $APK_ABS ($APK_SIZE_MB MB)"
           echo "APK_PATH=$APK_ABS" >> $GITHUB_OUTPUT
           echo "APK_SIZE_MB=$APK_SIZE_MB" >> $GITHUB_OUTPUT
           echo "APK_NAME=$(basename $APK_ABS)" >> $GITHUB_OUTPUT
+          echo "Done: $APK_ABS ($APK_SIZE_MB MB)"
 
-      # ─── 6B. Build Android (Gradle) APK ───
-      - name: 🔨 Build Android APK
+      - name: Build Android APK
         if: ${{ github.event.inputs.project_type == 'android' }}
         id: android_build
         working-directory: ${{ steps.detect.outputs.PROJECT_ROOT }}
         env:
           ANDROID_HOME: /usr/local/lib/android/sdk
-          JAVA_HOME: ${{ env.JAVA_HOME }}
         run: |
           BUILD_TYPE="${{ github.event.inputs.build_type }}"
-
-          # chmod gradlew
           if [ -f "gradlew" ]; then
             chmod +x gradlew
             GRADLE_CMD="./gradlew"
           else
-            echo "::warning::gradlew tidak ditemukan, menggunakan gradle global"
             GRADLE_CMD="gradle"
           fi
-
-          # Accept Android SDK licenses
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses 2>/dev/null || true
-
-          echo "🔨 Running Gradle build ($BUILD_TYPE)..."
-          BUILD_TASK="assemble$(echo ${BUILD_TYPE^})"  # assembleDebug / assembleRelease
-
+          if [ "$BUILD_TYPE" = "release" ]; then
+            BUILD_TASK="assembleRelease"
+          else
+            BUILD_TASK="assembleDebug"
+          fi
           $GRADLE_CMD $BUILD_TASK \
             --no-daemon \
             --stacktrace \
-            --info \
             -Dfile.encoding=UTF-8 \
             -Dorg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=1g" \
-            2>&1 | tee /tmp/gradle_build.log
-
-          BUILD_EXIT=${PIPESTATUS[0]}
-          if [ $BUILD_EXIT -ne 0 ]; then
-            echo "::error::Gradle build gagal!"
-            exit $BUILD_EXIT
+            2>&1 | tee /tmp/build.log
+          if [ $? -ne 0 ]; then
+            echo "ERROR: Gradle build gagal"
+            exit 1
           fi
-
-          # Temukan APK
           APK_PATH=$(find . -path "*/outputs/apk/$BUILD_TYPE/*.apk" | head -1)
           if [ -z "$APK_PATH" ]; then
             APK_PATH=$(find . -name "*.apk" | head -1)
           fi
-
           if [ -z "$APK_PATH" ]; then
-            echo "::error::APK tidak ditemukan setelah build!"
+            echo "ERROR: APK tidak ditemukan!"
             exit 1
           fi
-
-          APK_SIZE=$(stat -c%s "$APK_PATH" 2>/dev/null || stat -f%z "$APK_PATH")
+          APK_SIZE=$(stat -c%s "$APK_PATH")
           APK_SIZE_MB=$(echo "scale=2; $APK_SIZE/1048576" | bc)
           APK_ABS=$(realpath "$APK_PATH")
-
-          echo "✅ APK: $APK_ABS ($APK_SIZE_MB MB)"
           echo "APK_PATH=$APK_ABS" >> $GITHUB_OUTPUT
           echo "APK_SIZE_MB=$APK_SIZE_MB" >> $GITHUB_OUTPUT
           echo "APK_NAME=$(basename $APK_ABS)" >> $GITHUB_OUTPUT
+          echo "Done: $APK_ABS ($APK_SIZE_MB MB)"
 
-      # ─── 7. Upload APK sebagai artifact ───
-      - name: 📤 Upload APK Artifact
+      - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: apk-output
-          # Merge output dari kedua step (hanya yang jalan yang punya value)
           path: |
             ${{ steps.flutter_build.outputs.APK_PATH }}
             ${{ steps.android_build.outputs.APK_PATH }}
           retention-days: 1
           if-no-files-found: error
 
-      # ─── 8. Kirim notifikasi sukses ke Telegram ───
-      - name: ✅ Notify Telegram (Success)
+      - name: Notify Telegram Success
         if: success()
         run: |
           CHAT_ID="${{ github.event.inputs.chat_id }}"
           BOT_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}"
           RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-
           APK_SIZE_MB="${{ steps.flutter_build.outputs.APK_SIZE_MB }}${{ steps.android_build.outputs.APK_SIZE_MB }}"
           APK_NAME="${{ steps.flutter_build.outputs.APK_NAME }}${{ steps.android_build.outputs.APK_NAME }}"
           PROJECT_TYPE="${{ github.event.inputs.project_type }}"
           BUILD_TYPE="${{ github.event.inputs.build_type }}"
+          TEXT="Build Selesai! Type: ${PROJECT_TYPE} | Build: ${BUILD_TYPE} | APK: ${APK_NAME} | Size: ${APK_SIZE_MB} MB | Bot sedang download dan kirim APK... | Log: ${RUN_URL}"
+          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+            -d "chat_id=${CHAT_ID}" \
+            -d "text=${TEXT}" \
+            -d "parse_mode=HTML"
 
-          MESSAGE="✅ <b>GitHub Actions Build Selesai!</b>
-━━━━━━━━━━━━━━━━━━
-📱 <b>Type:</b> ${PROJECT_TYPE}
-🎁 <b>Build:</b> ${BUILD_TYPE}
-📦 <b>APK:</b> ${APK_NAME}
-💾 <b>Ukuran:</b> ${APK_SIZE_MB} MB
-
-⏳ <i>Bot sedang mengunduh &amp; mengirim APK...</i>
-🔗 <a href='${RUN_URL}'>Lihat Log Build</a>"
-
-          curl -s -X POST \
-            "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-            -H "Content-Type: application/json" \
-            -d "{
-              \"chat_id\": \"${CHAT_ID}\",
-              \"text\": \"${MESSAGE}\",
-              \"parse_mode\": \"HTML\",
-              \"disable_web_page_preview\": true
-            }"
-
-      # ─── 9. Kirim error log ke Telegram jika gagal ───
-      - name: ❌ Notify Telegram (Failure) + Kirim Log
+      - name: Notify Telegram Failure
         if: failure()
         run: |
           CHAT_ID="${{ github.event.inputs.chat_id }}"
@@ -268,55 +192,30 @@ jobs:
           RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           PROJECT_TYPE="${{ github.event.inputs.project_type }}"
           BUILD_TYPE="${{ github.event.inputs.build_type }}"
-
-          # Kumpulkan error dari log build
-          ERROR_LOG=""
-          if [ -f "/tmp/flutter_build.log" ]; then
-            ERROR_LOG=$(grep -E "Error|error:|Exception|FAILED|✗" /tmp/flutter_build.log | tail -30 || true)
-          fi
-          if [ -f "/tmp/gradle_build.log" ]; then
-            ERROR_LOG=$(grep -E "FAILURE:|error:|Error:|Exception|> Task|BUILD FAILED" /tmp/gradle_build.log | grep -v "^Note:" | tail -40 || true)
-          fi
-
-          # Buat file log lengkap untuk dikirim
-          FULL_LOG_FILE="/tmp/build_error_log.txt"
-          echo "=== BUILD ERROR LOG ===" > $FULL_LOG_FILE
-          echo "Date: $(date)" >> $FULL_LOG_FILE
-          echo "Project Type: $PROJECT_TYPE" >> $FULL_LOG_FILE
-          echo "Build Type: $BUILD_TYPE" >> $FULL_LOG_FILE
-          echo "Run URL: $RUN_URL" >> $FULL_LOG_FILE
-          echo "" >> $FULL_LOG_FILE
-
-          if [ -f "/tmp/flutter_build.log" ]; then
-            echo "=== FLUTTER BUILD LOG ===" >> $FULL_LOG_FILE
-            cat /tmp/flutter_build.log >> $FULL_LOG_FILE
-          fi
-          if [ -f "/tmp/gradle_build.log" ]; then
-            echo "=== GRADLE BUILD LOG ===" >> $FULL_LOG_FILE
-            cat /tmp/gradle_build.log >> $FULL_LOG_FILE
+          FULL_LOG="/tmp/build_error_log.txt"
+          echo "BUILD ERROR LOG" > $FULL_LOG
+          echo "Date: $(date)" >> $FULL_LOG
+          echo "Type: $PROJECT_TYPE | Build: $BUILD_TYPE" >> $FULL_LOG
+          echo "Run: $RUN_URL" >> $FULL_LOG
+          echo "" >> $FULL_LOG
+          if [ -f "/tmp/build.log" ]; then
+            echo "=== BUILD LOG ===" >> $FULL_LOG
+            cat /tmp/build.log >> $FULL_LOG
           fi
           if [ -f "/tmp/pub_get.log" ]; then
-            echo "=== PUB GET LOG ===" >> $FULL_LOG_FILE
-            cat /tmp/pub_get.log >> $FULL_LOG_FILE
+            echo "=== PUB GET LOG ===" >> $FULL_LOG
+            cat /tmp/pub_get.log >> $FULL_LOG
           fi
+          ERROR_SNIPPET=$(grep -E "Error|error:|Exception|FAILED|BUILD FAILED" /tmp/build.log 2>/dev/null | tail -15 | tr '\n' ' ' | cut -c1-500 || echo "Cek log lengkap")
+          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+            -d "chat_id=${CHAT_ID}" \
+            --data-urlencode "text=Build Gagal! (${PROJECT_TYPE} ${BUILD_TYPE})
 
-          # Escape untuk JSON
-          SAFE_ERROR=$(echo "$ERROR_LOG" | head -20 | sed 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g' | cut -c1-800)
+Error: ${ERROR_SNIPPET}
 
-          # Kirim pesan error + ringkasan
-          curl -s -X POST \
-            "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-            -H "Content-Type: application/json" \
-            -d "{
-              \"chat_id\": \"${CHAT_ID}\",
-              \"text\": \"❌ <b>Build Gagal!</b>\\n━━━━━━━━━━━━━━━━━━\\n📱 Type: ${PROJECT_TYPE}\\n🎁 Build: ${BUILD_TYPE}\\n\\n<b>Error:</b>\\n<code>${SAFE_ERROR}</code>\\n\\n🔗 <a href='${RUN_URL}'>Lihat Log Lengkap di GitHub</a>\",
-              \"parse_mode\": \"HTML\",
-              \"disable_web_page_preview\": true
-            }"
-
-          # Kirim file log lengkap
-          curl -s -X POST \
-            "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument" \
+Log lengkap: ${RUN_URL}" \
+            -d "parse_mode=HTML"
+          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument" \
             -F "chat_id=${CHAT_ID}" \
-            -F "document=@${FULL_LOG_FILE}" \
-            -F "caption=📝 Full Error Log - ${PROJECT_TYPE} ${BUILD_TYPE} build" || true
+            -F "document=@${FULL_LOG}" \
+            -F "caption=Full Error Log - ${PROJECT_TYPE} ${BUILD_TYPE}" || true
