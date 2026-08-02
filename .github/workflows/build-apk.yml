@@ -87,16 +87,11 @@ jobs:
           done
 
           if [ -z "$ASSET_URL" ] || [ "$ASSET_URL" = "null" ]; then
-            echo "❌ Gagal mendapatkan asset setelah $MAX_RETRY kali percobaan!"
+            echo "###BOT_ERROR_START###"
+            echo "❌ Gagal mendapatkan asset ZIP dari release setelah $MAX_RETRY kali percobaan."
             echo "Release response:"
-            echo "$RELEASE_RESPONSE" | jq '.'
-
-            echo ""
-            echo "📋 Daftar release yang ada:"
-            curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-              "https://api.github.com/repos/${{ github.repository }}/releases?per_page=5" | \
-              jq '.[].tag_name'
-
+            echo "$RELEASE_RESPONSE" | jq -c '.'
+            echo "###BOT_ERROR_END###"
             exit 1
           fi
 
@@ -104,7 +99,9 @@ jobs:
           curl -L -o project.zip "$ASSET_URL"
 
           if [ ! -f project.zip ]; then
-            echo "❌ File ZIP gagal didownload!"
+            echo "###BOT_ERROR_START###"
+            echo "❌ File ZIP gagal didownload dari release."
+            echo "###BOT_ERROR_END###"
             exit 1
           fi
 
@@ -128,9 +125,11 @@ jobs:
               cp -rf "$PROJECT_DIR"/* .
               cp -rf "$PROJECT_DIR"/.* . 2>/dev/null || true
             else
-              echo "❌ pubspec.yaml TIDAK DITEMUKAN!"
-              echo "Isi ZIP:"
+              echo "###BOT_ERROR_START###"
+              echo "❌ pubspec.yaml TIDAK DITEMUKAN di dalam ZIP."
+              echo "Isi ZIP (maks 50 baris):"
               ls -laR project_extracted/ | head -50
+              echo "###BOT_ERROR_END###"
               exit 1
             fi
           fi
@@ -348,9 +347,10 @@ jobs:
           done
 
           if [ $ERROR_FOUND -eq 1 ]; then
-            echo ""
-            echo "❌ VALIDATION FAILED - Some required icons are missing!"
-            echo "This will likely cause build to fail."
+            echo "###BOT_ERROR_START###"
+            echo "❌ Validasi resource icon gagal - ada ic_launcher.png yang hilang."
+            echo "Ini akan menyebabkan build gagal di step selanjutnya."
+            echo "###BOT_ERROR_END###"
           else
             echo ""
             echo "✅ VALIDATION PASSED - All resources are ready!"
@@ -633,10 +633,11 @@ jobs:
             echo ""
             echo "❌❌❌ PUB GET GAGAL - TIDAK ADA KANDIDAT YANG BISA DIAUTO-FIX ❌❌❌"
             echo ""
-            echo "=== RINGKASAN BARIS ERROR PENTING ==="
-            grep -E "^([Bb]ecause|[Tt]he|>|✗|[Ee]rror)" pub_get_log.txt | sort -u || echo "(tidak ada pola baku yang cocok, lihat FULL LOG di atas)"
+            echo "###BOT_ERROR_START###"
+            echo "❌ Pub get gagal (dependency resolution error):"
             echo ""
-            echo "💡 Kemungkinan ini error yang belum dikenali auto-fix, cek log lengkap di atas."
+            grep -E "^([Bb]ecause|[Tt]he|>|✗|[Ee]rror)" pub_get_log.txt | sort -u || tail -20 pub_get_log.txt
+            echo "###BOT_ERROR_END###"
             exit 1
           fi
 
@@ -656,14 +657,11 @@ jobs:
             echo ""
             echo "❌❌❌ PUB GET MASIH GAGAL SETELAH AUTO-FIX ❌❌❌"
             echo ""
-            echo "=== FULL ERROR LOG (Attempt 2) ==="
-            cat pub_get_log_retry.txt
+            echo "###BOT_ERROR_START###"
+            echo "❌ Pub get masih gagal setelah auto-fix dependensi:"
             echo ""
-            echo "=== RINGKASAN BARIS ERROR PENTING ==="
-            grep -E "^([Bb]ecause|[Tt]he|>|✗|[Ee]rror)" pub_get_log_retry.txt | sort -u || echo "(tidak ada pola baku yang cocok, lihat FULL LOG di atas)"
-            echo ""
-            echo "💡 pub get tidak selalu bisa diperbaiki otomatis (mis. konflik versi antar-package)."
-            echo "💡 Cek FULL ERROR LOG di atas, atau download artifact 'pub-get-error-log' untuk detail."
+            grep -E "^([Bb]ecause|[Tt]he|>|✗|[Ee]rror)" pub_get_log_retry.txt | sort -u || tail -20 pub_get_log_retry.txt
+            echo "###BOT_ERROR_END###"
             exit 1
           fi
 
@@ -681,12 +679,18 @@ jobs:
       - name: Build APK Debug
         if: steps.build_info.outputs.build_type == 'apk-debug'
         run: |
+          set +e
           flutter build apk --debug \
             --no-shrink \
             --target-platform android-arm,android-arm64,android-x64 2>&1 | tee build_log.txt
           BUILD_EXIT=${PIPESTATUS[0]}
+          set -e
           if [ "$BUILD_EXIT" -ne 0 ]; then
-            echo "❌ Build APK Debug gagal. Lihat log di atas."
+            echo "###BOT_ERROR_START###"
+            echo "❌ Build APK Debug gagal."
+            echo ""
+            grep -E "Error:|error:|FAILURE|Exception|Execution failed|BUILD FAILED" build_log.txt | sort -u || tail -30 build_log.txt
+            echo "###BOT_ERROR_END###"
             exit 1
           fi
           echo "✅ APK Debug selesai"
@@ -694,13 +698,19 @@ jobs:
       - name: Build APK Release
         if: steps.build_info.outputs.build_type == 'apk-release'
         run: |
+          set +e
           flutter build apk --release \
             --obfuscate \
             --split-debug-info=build/debug-info \
             --target-platform android-arm,android-arm64,android-x64 2>&1 | tee build_log.txt
           BUILD_EXIT=${PIPESTATUS[0]}
+          set -e
           if [ "$BUILD_EXIT" -ne 0 ]; then
-            echo "❌ Build APK Release gagal. Lihat log di atas."
+            echo "###BOT_ERROR_START###"
+            echo "❌ Build APK Release gagal."
+            echo ""
+            grep -E "Error:|error:|FAILURE|Exception|Execution failed|BUILD FAILED" build_log.txt | sort -u || tail -30 build_log.txt
+            echo "###BOT_ERROR_END###"
             exit 1
           fi
           echo "✅ APK Release selesai"
@@ -708,12 +718,18 @@ jobs:
       - name: Build AAB Release
         if: steps.build_info.outputs.build_type == 'aab-release'
         run: |
+          set +e
           flutter build appbundle --release \
             --obfuscate \
             --split-debug-info=build/debug-info 2>&1 | tee build_log.txt
           BUILD_EXIT=${PIPESTATUS[0]}
+          set -e
           if [ "$BUILD_EXIT" -ne 0 ]; then
-            echo "❌ Build AAB Release gagal. Lihat log di atas."
+            echo "###BOT_ERROR_START###"
+            echo "❌ Build AAB Release gagal."
+            echo ""
+            grep -E "Error:|error:|FAILURE|Exception|Execution failed|BUILD FAILED" build_log.txt | sort -u || tail -30 build_log.txt
+            echo "###BOT_ERROR_END###"
             exit 1
           fi
           echo "✅ AAB Release selesai"
