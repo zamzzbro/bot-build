@@ -595,6 +595,174 @@ jobs:
           echo "TYPE_NUMBER_PASSWORD occurrences:"
           grep -rn "TYPE_NUMBER_PASSWORD" android/ 2>/dev/null || echo "✅ None found (FIXED!)"
 
+      # ============================================
+      # 📦 FLUTTER PUB GET (Dengan Auto-Fix)
+      # ============================================
+      - name: 📦 Flutter Pub Get (dengan Auto-Fix Missing Packages)
+        run: |
+          flutter config --no-analytics
+          dart --disable-analytics
+          
+          echo "=========================================="
+          echo "=== FLUTTER PUB GET (dengan Auto-Fix) ==="
+          echo "=========================================="
+          
+          MAX_ATTEMPTS=3
+          ATTEMPT=1
+          SUCCESS=0
+          
+          while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+            echo ""
+            echo "🔄 Attempt $ATTEMPT/$MAX_ATTEMPTS..."
+            
+            # Jalankan flutter pub get dan capture output
+            if flutter pub get 2>&1 | tee /tmp/pub_output.log; then
+              echo "✅ Flutter Pub Get berhasil!"
+              SUCCESS=1
+              break
+            else
+              echo "❌ Flutter Pub Get gagal pada attempt $ATTEMPT"
+              
+              # ============================================
+              # PARSING ERROR MESSAGE
+              # ============================================
+              
+              if grep -q "version solving failed" /tmp/pub_output.log || \
+                 grep -q "could not find package" /tmp/pub_output.log || \
+                 grep -q "is not compatible" /tmp/pub_output.log; then
+                
+                echo "🔍 Mencari package yang bermasalah..."
+                
+                # Ekstrak nama package dari berbagai format error
+                FAILED_PACKAGES=$(
+                  {
+                    grep -oP "(?<=Package )[^ ]+" /tmp/pub_output.log 2>/dev/null || true
+                    grep -oP "(?<=Could not find package )\w+" /tmp/pub_output.log 2>/dev/null || true
+                    grep -E "^  [a-z_]+ [0-9]" /tmp/pub_output.log 2>/dev/null | awk '{print $1}' || true
+                    grep -oP "(?<=')\w+(?=' version)" /tmp/pub_output.log 2>/dev/null || true
+                  } | sort -u | head -5
+                )
+                
+                if [ -n "$FAILED_PACKAGES" ]; then
+                  echo "📝 Package yang bermasalah: $(echo $FAILED_PACKAGES | tr '\n' ', ')"
+                  echo ""
+                  echo "🔧 Mencoba auto-fix..."
+                  
+                  # Backup pubspec sebelum modifikasi
+                  cp pubspec.yaml "pubspec.yaml.backup_attempt_$ATTEMPT"
+                  
+                  # ============================================
+                  # ADD PACKAGES KE PUBSPEC
+                  # ============================================
+                  
+                  CHANGES_MADE=0
+                  
+                  for pkg in $FAILED_PACKAGES; do
+                    echo "  ➕ Processing package: $pkg"
+                    
+                    # Skip jika package sudah ada
+                    if grep -q "^  $pkg:" pubspec.yaml 2>/dev/null; then
+                      echo "    ℹ️  Sudah ada di pubspec.yaml"
+                      
+                      # Coba update version-nya ke 'any'
+                      CURRENT_VERSION=$(grep "^  $pkg:" pubspec.yaml | awk '{print $2}')
+                      echo "    Current version: $CURRENT_VERSION → updating to 'any'..."
+                      sed -i "s/^  $pkg:.*/  $pkg: any/g" pubspec.yaml
+                      CHANGES_MADE=1
+                      
+                    else
+                      # Coba fetch latest version dari pub.dev
+                      LATEST_VERSION=$(curl -s "https://pub.dev/api/packages/$pkg" 2>/dev/null | \
+                        grep -oP '"latest":{"version":"\K[^"]+' | head -1 || echo "")
+                      
+                      if [ -z "$LATEST_VERSION" ]; then
+                        LATEST_VERSION="any"
+                      fi
+                      
+                      echo "    Version to add: $LATEST_VERSION"
+                      
+                      # Tambahkan ke dependencies
+                      if grep -q "^dependencies:" pubspec.yaml; then
+                        sed -i "/^dependencies:/a\\  $pkg: $LATEST_VERSION" pubspec.yaml
+                        echo "    ✅ Ditambahkan ke pubspec.yaml"
+                        CHANGES_MADE=1
+                      else
+                        echo "    ❌ Tidak bisa menemukan section dependencies"
+                      fi
+                    fi
+                  done
+                  
+                else
+                  echo "⚠️ Tidak bisa mengidentifikasi package yang bermasalah"
+                  echo ""
+                  echo "🔧 Fallback Mode: Menambahkan common packages..."
+                  
+                  # Tambahkan beberapa package umum
+                  COMMON_PACKAGES="get http provider dio intl shared_preferences"
+                  CHANGES_MADE=0
+                  
+                  for pkg in $COMMON_PACKAGES; do
+                    if ! grep -q "^  $pkg:" pubspec.yaml; then
+                      sed -i "/^dependencies:/a\\  $pkg: any" pubspec.yaml
+                      echo "  ✅ Ditambahkan: $pkg"
+                      CHANGES_MADE=1
+                    fi
+                  done
+                fi
+                
+                if [ $CHANGES_MADE -eq 1 ]; then
+                  echo ""
+                  echo "📄 pubspec.yaml (dependencies section):"
+                  echo "---"
+                  grep -A 25 "^dependencies:" pubspec.yaml | head -30
+                  echo "---"
+                fi
+                
+              else
+                echo "⚠️ Error tidak related dengan missing packages"
+                echo ""
+                echo "Possible causes:"
+                echo "  - Network issue"
+                echo "  - Corrupted pubspec.yaml"
+                echo "  - SDK version mismatch"
+                echo ""
+                echo "📋 Error output (tail -15):"
+                tail -15 /tmp/pub_output.log
+              fi
+            fi
+            
+            ATTEMPT=$((ATTEMPT + 1))
+            
+            if [ $ATTEMPT -le $MAX_ATTEMPTS ] && [ $SUCCESS -eq 0 ]; then
+              echo ""
+              echo "⏳ Waiting 5 seconds before retry..."
+              sleep 5
+            fi
+          done
+          
+          # ============================================
+          # FINAL CHECK
+          # ============================================
+          
+          if [ $SUCCESS -eq 0 ]; then
+            echo ""
+            echo "=========================================="
+            echo "❌ FLUTTER PUB GET FAILED"
+            echo "=========================================="
+            echo ""
+            echo "Status: Gagal setelah $MAX_ATTEMPTS attempts"
+            echo ""
+            echo "Troubleshooting steps:"
+            echo "  1. Check internet connection"
+            echo "  2. Verify pubspec.yaml syntax"
+            echo "  3. Clear Flutter cache: flutter clean"
+            echo "  4. Update Flutter: flutter upgrade"
+            echo ""
+            echo "📋 Last error output:"
+            cat /tmp/pub_output.log | tail -30
+            exit 1
+          fi
+
       - name: Set Build Type
         id: build_info
         run: |
@@ -604,67 +772,6 @@ jobs:
           fi
           echo "build_type=$BUILD_TYPE" >> $GITHUB_OUTPUT
           echo "Build type: $BUILD_TYPE"
-
-      # ============================================
-      # 🪄 AUTO-ADD MISSING DEPENDENCIES & PUB GET
-      # ============================================
-      - name: 🪄 Resolve Missing Dependencies & Flutter Pub Get
-        run: |
-          flutter config --no-analytics
-          dart --disable-analytics
-          
-          echo "=========================================="
-          echo "=== SCANNING MISSING PACKAGES ==="
-          echo "=========================================="
-          
-          # Ekstrak semua import package: dari folder lib/
-          grep -rhoE "import 'package:[a-zA-Z0-9_]+/" lib/ 2>/dev/null | \
-            sed -E "s/import 'package:([a-zA-Z0-9_]+)\//\1/" | \
-            sort -u > /tmp/imported.txt || touch /tmp/imported.txt
-          
-          # Filter package bawaan framework yang tidak perlu didaftarkan di pubspec
-          sed -i '/^flutter$/d' /tmp/imported.txt
-          sed -i '/^test$/d' /tmp/imported.txt
-          sed -i '/^flutter_localizations$/d' /tmp/imported.txt
-          
-          MISSING_FOUND=0
-          
-          while read pkg; do
-            # Cek apakah package sudah ada di pubspec.yaml
-            if ! grep -qE "^\s+${pkg}:" pubspec.yaml; then
-              echo "⚠️ Package '$pkg' di-import tapi TIDAK ADA di pubspec.yaml!"
-              echo "➕ Menambahkan otomatis: $pkg"
-              flutter pub add "$pkg" || echo "❌ Gagal menambahkan $pkg (mungkin bukan package pub.dev)"
-              MISSING_FOUND=1
-            fi
-          done < /tmp/imported.txt
-          
-          if [ $MISSING_FOUND -eq 0 ]; then
-            echo "✅ Semua package yang di-import sudah ada di pubspec.yaml."
-          fi
-          
-          echo ""
-          echo "=========================================="
-          echo "=== RUNNING FLUTTER PUB GET ==="
-          echo "=========================================="
-          
-          # Retry 3 kali untuk flutter pub get
-          MAX_RETRY=3
-          RETRY=0
-          while [ $RETRY -lt $MAX_RETRY ]; do
-            echo "Attempt $((RETRY+1))/$MAX_RETRY..."
-            if flutter pub get; then
-              echo "✅ Flutter Pub Get Berhasil!"
-              exit 0
-            else
-              echo "❌ Pub Get gagal, menunggu 5 detik untuk mencoba lagi..."
-              sleep 5
-              RETRY=$((RETRY+1))
-            fi
-          done
-          
-          echo "❌ Gagal melakukan flutter pub get setelah $MAX_RETRY percobaan."
-          exit 1
 
       - name: Build APK Debug
         if: steps.build_info.outputs.build_type == 'apk-debug'
