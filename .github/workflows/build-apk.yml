@@ -13,7 +13,7 @@ on:
           - apk-release
           - aab-release
       flutter_version:
-        description: 'Flutter version override (kosongkan untuk default)'
+        description: 'Flutter version override (kosongkan untuk pakai stable terbaru)'
         required: false
         default: ''
         type: string
@@ -50,27 +50,27 @@ jobs:
         if: github.event.inputs.release_tag != ''
         run: |
           echo "📥 Mendownload project dari release: ${{ github.event.inputs.release_tag }}"
-          
+
           echo "⏳ Menunggu 15 detik untuk memastikan release siap..."
           sleep 15
-          
+
           MAX_RETRY=5
           RETRY=0
           ASSET_URL=""
-          
+
           while [ $RETRY -lt $MAX_RETRY ]; do
             echo "🔍 Attempt $((RETRY+1))/$MAX_RETRY: Mencari release..."
-            
+
             RELEASE_RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
               "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ github.event.inputs.release_tag }}")
-            
+
             RELEASE_ID=$(echo "$RELEASE_RESPONSE" | jq -r '.id')
-            
+
             if [ "$RELEASE_ID" != "null" ] && [ -n "$RELEASE_ID" ]; then
               echo "✅ Release ditemukan! ID: $RELEASE_ID"
-              
+
               ASSET_URL=$(echo "$RELEASE_RESPONSE" | jq -r '.assets[0].browser_download_url')
-              
+
               if [ "$ASSET_URL" != "null" ] && [ -n "$ASSET_URL" ]; then
                 echo "✅ Asset ditemukan: $ASSET_URL"
                 break
@@ -82,38 +82,38 @@ jobs:
               echo "⚠️ Release belum ditemukan, tunggu 10 detik..."
               sleep 10
             fi
-            
+
             RETRY=$((RETRY+1))
           done
-          
+
           if [ -z "$ASSET_URL" ] || [ "$ASSET_URL" = "null" ]; then
             echo "❌ Gagal mendapatkan asset setelah $MAX_RETRY kali percobaan!"
             echo "Release response:"
             echo "$RELEASE_RESPONSE" | jq '.'
-            
+
             echo ""
             echo "📋 Daftar release yang ada:"
             curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
               "https://api.github.com/repos/${{ github.repository }}/releases?per_page=5" | \
               jq '.[].tag_name'
-            
+
             exit 1
           fi
-          
+
           echo "📦 Download dari: $ASSET_URL"
           curl -L -o project.zip "$ASSET_URL"
-          
+
           if [ ! -f project.zip ]; then
             echo "❌ File ZIP gagal didownload!"
             exit 1
           fi
-          
+
           echo "📏 Size: $(du -h project.zip | cut -f1)"
-          
+
           echo "📂 Mengekstrak ZIP..."
           mkdir -p project_extracted
           unzip -o project.zip -d project_extracted/
-          
+
           if [ -f "project_extracted/pubspec.yaml" ]; then
             echo "✅ pubspec.yaml ditemukan di root ZIP"
             cp -rf project_extracted/* .
@@ -121,7 +121,7 @@ jobs:
           else
             echo "🔍 Mencari pubspec.yaml di subfolder..."
             SUBFOLDER=$(find project_extracted -name "pubspec.yaml" -not -path "*/.*" | head -1)
-            
+
             if [ -n "$SUBFOLDER" ]; then
               PROJECT_DIR=$(dirname "$SUBFOLDER")
               echo "✅ pubspec.yaml ditemukan di: $PROJECT_DIR"
@@ -134,9 +134,9 @@ jobs:
               exit 1
             fi
           fi
-          
+
           rm -rf project_extracted project.zip
-          
+
           echo "✅ Project siap:"
           echo "---"
           ls -la
@@ -153,7 +153,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.32.8'
+          flutter-version: ${{ github.event.inputs.flutter_version }}
           channel: 'stable'
           cache: true
 
@@ -165,12 +165,12 @@ jobs:
           echo "=========================================="
           echo "=== REGENERATING LAUNCHER ICONS ==="
           echo "=========================================="
-          
+
           if ! command -v convert >/dev/null 2>&1; then
             echo "📦 Installing ImageMagick..."
             sudo apt-get update -qq && sudo apt-get install -y -qq imagemagick
           fi
-          
+
           SOURCE_ICON=""
           if [ -f "assets/icon/icon.jpg" ]; then
             SOURCE_ICON="assets/icon/icon.jpg"
@@ -179,43 +179,43 @@ jobs:
           elif [ -f "assets/icon/icon.webp" ]; then
             SOURCE_ICON="assets/icon/icon.webp"
           fi
-          
+
           if [ -n "$SOURCE_ICON" ]; then
             echo "✅ Source icon found: $SOURCE_ICON"
-            
+
             echo "🗑️ Removing all existing ic_launcher files..."
             find android/app/src/main/res -name "ic_launcher*" -type f -delete
-            
+
             echo "🎨 Creating icons for all densities..."
-            
+
             mkdir -p android/app/src/main/res/mipmap-mdpi
             convert "$SOURCE_ICON" -resize 48x48 -gravity center -extent 48x48 android/app/src/main/res/mipmap-mdpi/ic_launcher.png
             echo "  ✅ mipmap-mdpi/ic_launcher.png (48x48)"
-            
+
             mkdir -p android/app/src/main/res/mipmap-hdpi
             convert "$SOURCE_ICON" -resize 72x72 -gravity center -extent 72x72 android/app/src/main/res/mipmap-hdpi/ic_launcher.png
             echo "  ✅ mipmap-hdpi/ic_launcher.png (72x72)"
-            
+
             mkdir -p android/app/src/main/res/mipmap-xhdpi
             convert "$SOURCE_ICON" -resize 96x96 -gravity center -extent 96x96 android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
             echo "  ✅ mipmap-xhdpi/ic_launcher.png (96x96)"
-            
+
             mkdir -p android/app/src/main/res/mipmap-xxhdpi
             convert "$SOURCE_ICON" -resize 144x144 -gravity center -extent 144x144 android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
             echo "  ✅ mipmap-xxhdpi/ic_launcher.png (144x144)"
-            
+
             mkdir -p android/app/src/main/res/mipmap-xxxhdpi
             convert "$SOURCE_ICON" -resize 192x192 -gravity center -extent 192x192 android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
             echo "  ✅ mipmap-xxxhdpi/ic_launcher.png (192x192)"
-            
+
             echo "🎨 Creating adaptive icon (Android 8+)..."
             mkdir -p android/app/src/main/res/mipmap-anydpi-v26
-            
+
             mkdir -p android/app/src/main/res/drawable
             convert "$SOURCE_ICON" -resize 108x108 -gravity center -extent 108x108 android/app/src/main/res/mipmap-xxhdpi/ic_launcher_background.png
-            
+
             convert "$SOURCE_ICON" -resize 72x72 -gravity center -extent 108x108 android/app/src/main/res/mipmap-xxhdpi/ic_launcher_foreground.png
-            
+
             cat > android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml << 'XMLEOF'
           <?xml version="1.0" encoding="utf-8"?>
           <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
@@ -224,10 +224,10 @@ jobs:
           </adaptive-icon>
           XMLEOF
             echo "  ✅ mipmap-anydpi-v26/ic_launcher.xml"
-            
+
           else
             echo "⚠️ No source icon found, creating placeholder icons..."
-            
+
             for density in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
               case $density in
                 mdpi) SIZE="48x48" ;;
@@ -236,19 +236,19 @@ jobs:
                 xxhdpi) SIZE="144x144" ;;
                 xxxhdpi) SIZE="192x192" ;;
               esac
-              
+
               OUTPUT_DIR="android/app/src/main/res/mipmap-${density}"
               mkdir -p "$OUTPUT_DIR"
-              
+
               convert -size "$SIZE" xc:'#2196F3' \
                 -fill white -gravity center -pointsize 24 \
                 -annotate 0 "App" \
                 "$OUTPUT_DIR/ic_launcher.png"
-              
+
               echo "  ✅ Placeholder: mipmap-${density}/ic_launcher.png (${SIZE})"
             done
           fi
-          
+
           echo ""
           echo "=== ICON REGENERATION COMPLETE ==="
           echo "Files created:"
@@ -262,7 +262,7 @@ jobs:
           echo "=========================================="
           echo "=== CLEANING ICON RESOURCES ==="
           echo "=========================================="
-          
+
           echo "🗑️ Removing non-PNG icon files..."
           find android/app/src/main/res -type f \( \
             -name "ic_launcher.jpg" -o \
@@ -277,14 +277,14 @@ jobs:
             -name "ic_launcher_background.jpg" -o \
             -name "ic_launcher_background.webp" \
           \) -delete 2>/dev/null || true
-          
+
           echo "🗑️ Removing 0-byte icon files..."
           find android/app/src/main/res -name "ic_launcher*" -type f -size 0 -delete 2>/dev/null || true
-          
+
           echo ""
           echo "=== REMAINING ICON FILES ==="
           find android/app/src/main/res -name "ic_launcher*" -type f -exec ls -lh {} \; | sort
-          
+
           echo ""
           echo "✅ Icon cleanup complete"
 
@@ -296,9 +296,9 @@ jobs:
           echo "=========================================="
           echo "=== VALIDATING ANDROID RESOURCES ==="
           echo "=========================================="
-          
+
           ERROR_FOUND=0
-          
+
           for png in $(find android/app/src/main/res -name "*.png" -type f); do
             SIZE=$(stat -c%s "$png" 2>/dev/null || echo 0)
             if [ "$SIZE" -eq 0 ]; then
@@ -307,7 +307,7 @@ jobs:
               rm -f "$png"
               continue
             fi
-            
+
             if command -v identify >/dev/null 2>&1; then
               if identify "$png" >/dev/null 2>&1; then
                 DIMENSIONS=$(identify -format "%wx%h" "$png" 2>/dev/null)
@@ -315,7 +315,7 @@ jobs:
               else
                 echo "❌ CORRUPT PNG: $png"
                 ERROR_FOUND=1
-                
+
                 echo "  🔧 Attempting to fix..."
                 convert -size 48x48 xc:'#2196F3' "$png" 2>/dev/null || {
                   echo "  ❌ Cannot fix, removing..."
@@ -324,7 +324,7 @@ jobs:
               fi
             fi
           done
-          
+
           if [ $ERROR_FOUND -eq 1 ]; then
             echo ""
             echo "⚠️ Some resources were corrupt and have been fixed/removed"
@@ -333,7 +333,7 @@ jobs:
             echo ""
             echo "✅ All PNG resources are valid!"
           fi
-          
+
           echo ""
           echo "=== FINAL CHECK: Required icons ==="
           for density in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
@@ -346,7 +346,7 @@ jobs:
               ERROR_FOUND=1
             fi
           done
-          
+
           if [ $ERROR_FOUND -eq 1 ]; then
             echo ""
             echo "❌ VALIDATION FAILED - Some required icons are missing!"
@@ -363,7 +363,7 @@ jobs:
             sed -i '/import com.nullx.pp.R;/d' "$FILE_PATH"
             echo "✅ Import R dihapus"
           fi
-          
+
           BUILD_GRADLE="android/app/build.gradle"
           if [ -f "$BUILD_GRADLE" ]; then
             if ! grep -q "namespace 'com.nullx.pp'" "$BUILD_GRADLE"; then
@@ -390,7 +390,7 @@ jobs:
       - name: 🔧 Fix minSdkVersion & AndroidManifest
         run: |
           echo "=== Fixing all gradle files ==="
-          
+
           find android -name "build.gradle" -o -name "build.gradle.kts" | while read f; do
             echo "Processing: $f"
             sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 23/g' "$f"
@@ -400,24 +400,24 @@ jobs:
             sed -i 's/minSdk = 21/minSdk = 23/g' "$f"
             sed -i 's/minSdk 21/minSdk 23/g' "$f"
           done
-          
+
           echo "=== All gradle files fixed ==="
           grep -r "minSdk" android/ 2>/dev/null | head -10
-          
+
           MANIFEST="android/app/src/main/AndroidManifest.xml"
           if [ -f "$MANIFEST" ]; then
             echo "=== Fixing AndroidManifest ==="
-            
+
             if ! grep -q "xmlns:tools" "$MANIFEST"; then
               sed -i 's/<manifest/<manifest xmlns:tools="http:\/\/schemas.android.com\/tools"/' "$MANIFEST"
               echo "✅ xmlns:tools added"
             fi
-            
+
             if ! grep -q "overrideLibrary" "$MANIFEST"; then
               sed -i 's/<application/<application\n        tools:overrideLibrary="com.llfbandit.record"/' "$MANIFEST"
               echo "✅ overrideLibrary added"
             fi
-            
+
             echo "--- AndroidManifest.xml ---"
             head -12 "$MANIFEST"
           fi
@@ -427,11 +427,11 @@ jobs:
           echo "=========================================="
           echo "=== FIX 1: compileSdk ke 36 ==="
           echo "=========================================="
-          
+
           find android -type f \( -name "build.gradle" -o -name "build.gradle.kts" \) | while read f; do
             echo "=== Before: $f ==="
             grep -n "compileSdk" "$f" || echo "(no compileSdk found)"
-            
+
             sed -i 's/compileSdkVersion\s*=\?\s*35/compileSdkVersion 36/g' "$f"
             sed -i 's/compileSdkVersion\s*=\?\s*34/compileSdkVersion 36/g' "$f"
             sed -i 's/compileSdkVersion\s*=\?\s*33/compileSdkVersion 36/g' "$f"
@@ -443,11 +443,11 @@ jobs:
             sed -i 's/compileSdk(33)/compileSdk(36)/g' "$f"
             sed -i 's/compileSdk\s\+35/compileSdk 36/g' "$f"
             sed -i 's/compileSdk\s\+34/compileSdk 36/g' "$f"
-            
+
             echo "=== After: $f ==="
             grep -n "compileSdk" "$f" || echo "(no compileSdk)"
           done
-          
+
           if [ -f android/build.gradle ]; then
             sed -i 's/compileSdkVersion\s*=\?\s*35/compileSdkVersion 36/g' android/build.gradle
             sed -i 's/compileSdk\s*=\?\s*35/compileSdk = 36/g' android/build.gradle
@@ -457,7 +457,7 @@ jobs:
           echo "=========================================="
           echo "=== FIX 2: Buat folder assets ==="
           echo "=========================================="
-          
+
           for dir in assets assets/images assets/videos assets/audio assets/fonts assets/icons; do
             if [ ! -d "$dir" ]; then
               mkdir -p "$dir"
@@ -467,7 +467,7 @@ jobs:
               echo "✅ Exists: $dir/"
             fi
           done
-          
+
           if [ -f pubspec.yaml ]; then
             echo "Reading pubspec.yaml for assets..."
             grep -E "^\s+-\s+" pubspec.yaml | sed 's/.*- //' | while read asset; do
@@ -496,14 +496,14 @@ jobs:
           echo "=========================================="
           echo "=== FIX 3: Java InputType ==="
           echo "=========================================="
-          
+
           JAVA_FILE="android/app/src/main/java/com/nullx/pp/LockOverlayService.java"
           if [ -f "$JAVA_FILE" ]; then
             echo "Fixing: $JAVA_FILE"
             cp "$JAVA_FILE" "$JAVA_FILE.bak"
-            
+
             sed -i 's/InputType\.TYPE_NUMBER_PASSWORD/(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD)/g' "$JAVA_FILE"
-            
+
             if grep -q "TYPE_NUMBER_PASSWORD" "$JAVA_FILE"; then
               echo "❌ Fix failed, masih ada TYPE_NUMBER_PASSWORD"
               if ! grep -q "import android.text.InputType" "$JAVA_FILE"; then
@@ -529,7 +529,7 @@ jobs:
           echo "=========================================="
           echo "=== ALL FIXES COMPLETE ==="
           echo "=========================================="
-          
+
           echo ""
           echo "=== Verification ==="
           echo "compileSdk values:"
@@ -578,66 +578,92 @@ jobs:
           cat pub_get_log.txt
           echo ""
 
-          # --- Deteksi kandidat nama package dari berbagai pola error pub get ---
-          # Pola 1: "Because <pkg> ..." / "no versions of <pkg> match"
-          P1=$(grep -oP "(?<=[Bb]ecause )[a-z0-9_]+(?= (from|>=|<=|version|does))" pub_get_log.txt 2>/dev/null | sort -u)
-          # Pola 2: "no versions of <pkg>"
-          P2=$(grep -oP "(?<=no versions of )[a-z0-9_]+" pub_get_log.txt 2>/dev/null | sort -u)
-          # Pola 3: "Package <pkg> not found" / "Couldn't resolve the package '<pkg>'"
-          P3=$(grep -oP "(?<=[Pp]ackage )'?[a-z0-9_]+" pub_get_log.txt 2>/dev/null | tr -d "'" | sort -u)
-          # Pola 4: "'<pkg>' doesn't exist / has no ... at version"
-          P4=$(grep -oP "'\K[a-z0-9_]+(?=' (doesn't exist|has no))" pub_get_log.txt 2>/dev/null | sort -u)
-          # Pola 5: target of URI doesn't exist -> package 'pkg' (import error di lib)
-          P5=$(grep -oP "package:\K[a-z0-9_]+" pub_get_log.txt 2>/dev/null | sort -u)
+          FIXED_SOMETHING=0
 
-          ALL_MISSING=$(printf "%s\n%s\n%s\n%s\n%s\n" "$P1" "$P2" "$P3" "$P4" "$P5" \
-            | sort -u | grep -v '^$' \
-            | grep -vE '^(flutter|dart|sdk|and|or|the|a|to|of|is|in|for|from)$' || true)
+          # --- PRIORITAS 1: parse saran RESMI dari pub, contoh:
+          #     "Consider downgrading your constraint on X: flutter pub add X:^1.2.3"
+          SUGGESTED_CMDS=$(grep -oP "flutter pub add \K[a-zA-Z0-9_]+:\^?[0-9a-zA-Z.\-]+" pub_get_log.txt | sort -u || true)
 
-          if [ -n "$ALL_MISSING" ]; then
-            echo "🔍 Kandidat package bermasalah terdeteksi:"
-            echo "$ALL_MISSING"
+          if [ -n "$SUGGESTED_CMDS" ]; then
+            echo "🔍 Saran resmi dari pub ditemukan:"
+            echo "$SUGGESTED_CMDS"
             echo ""
-
-            for pkg in $ALL_MISSING; do
-              echo "📦 Mencoba menambahkan dependensi: $pkg"
-              flutter pub add "$pkg" 2>&1 | tee -a pub_get_log.txt || echo "  ⚠️ Gagal menambahkan '$pkg' (kemungkinan bukan nama package pub.dev yang valid, dilewati)"
+            for cmd in $SUGGESTED_CMDS; do
+              echo "📦 Menjalankan saran resmi: flutter pub add $cmd"
+              if flutter pub add "$cmd" 2>&1 | tee -a pub_get_log.txt; then
+                FIXED_SOMETHING=1
+              else
+                echo "  ⚠️ Gagal menjalankan saran untuk $cmd"
+              fi
               echo ""
             done
+          fi
 
-            echo "=== Attempt 2: flutter pub get (setelah auto-fix pubspec) ==="
-            set +e
-            flutter pub get 2>&1 | tee pub_get_log_retry.txt
-            PUB_EXIT_CODE_2=${PIPESTATUS[0]}
-            set -e
+          # --- PRIORITAS 2 (fallback lama): tebak nama package hilang dari pola error umum ---
+          if [ "$FIXED_SOMETHING" -eq 0 ]; then
+            echo "🔍 Tidak ada saran resmi, mencoba pola fallback lama..."
 
-            if [ "$PUB_EXIT_CODE_2" -eq 0 ]; then
-              echo "✅ Pub get berhasil setelah auto-fix dependensi!"
+            P1=$(grep -oP "(?<=[Bb]ecause )[a-z0-9_]+(?= (from|>=|<=|version|does))" pub_get_log.txt 2>/dev/null | sort -u || true)
+            P2=$(grep -oP "(?<=no versions of )[a-z0-9_]+" pub_get_log.txt 2>/dev/null | sort -u || true)
+            P3=$(grep -oP "(?<=[Pp]ackage )'?[a-z0-9_]+" pub_get_log.txt 2>/dev/null | tr -d "'" | sort -u || true)
+            P4=$(grep -oP "'\K[a-z0-9_]+(?=' (doesn't exist|has no))" pub_get_log.txt 2>/dev/null | sort -u || true)
+            P5=$(grep -oP "package:\K[a-z0-9_]+" pub_get_log.txt 2>/dev/null | sort -u || true)
+
+            ALL_MISSING=$(printf "%s\n%s\n%s\n%s\n%s\n" "$P1" "$P2" "$P3" "$P4" "$P5" \
+              | sort -u | grep -v '^$' \
+              | grep -vE '^(flutter|dart|sdk|and|or|the|a|to|of|is|in|for|from)$' || true)
+
+            if [ -n "$ALL_MISSING" ]; then
+              echo "🔍 Kandidat package bermasalah (fallback):"
+              echo "$ALL_MISSING"
               echo ""
-              echo "--- pubspec.yaml (dependencies) setelah auto-fix ---"
-              sed -n '/^dependencies:/,/^dev_dependencies:/p' pubspec.yaml
-              exit 0
-            else
-              echo ""
-              echo "❌❌❌ PUB GET MASIH GAGAL SETELAH AUTO-FIX ❌❌❌"
-              echo ""
-              echo "=== FULL ERROR LOG (Attempt 2) ==="
-              cat pub_get_log_retry.txt
-              echo ""
-              echo "=== RINGKASAN BARIS ERROR PENTING ==="
-              grep -E "^([Bb]ecause|[Tt]he|>|✗|[Ee]rror)" pub_get_log_retry.txt | sort -u || echo "(tidak ada pola baku yang cocok, lihat FULL LOG di atas)"
-              echo ""
-              echo "💡 pub get tidak selalu bisa diperbaiki otomatis (mis. konflik versi antar-package)."
-              echo "💡 Cek FULL ERROR LOG di atas, atau download artifact 'pub-get-error-log' untuk detail."
-              exit 1
+              for pkg in $ALL_MISSING; do
+                echo "📦 Mencoba menambahkan dependensi: $pkg"
+                if flutter pub add "$pkg" 2>&1 | tee -a pub_get_log.txt; then
+                  FIXED_SOMETHING=1
+                else
+                  echo "  ⚠️ Gagal menambahkan '$pkg' (kemungkinan bukan nama package pub.dev yang valid, dilewati)"
+                fi
+                echo ""
+              done
             fi
-          else
-            echo "❌❌❌ PUB GET GAGAL - TIDAK ADA KANDIDAT PACKAGE YANG BISA DIAUTO-FIX ❌❌❌"
+          fi
+
+          if [ "$FIXED_SOMETHING" -eq 0 ]; then
+            echo ""
+            echo "❌❌❌ PUB GET GAGAL - TIDAK ADA KANDIDAT YANG BISA DIAUTO-FIX ❌❌❌"
             echo ""
             echo "=== RINGKASAN BARIS ERROR PENTING ==="
             grep -E "^([Bb]ecause|[Tt]he|>|✗|[Ee]rror)" pub_get_log.txt | sort -u || echo "(tidak ada pola baku yang cocok, lihat FULL LOG di atas)"
             echo ""
-            echo "💡 Kemungkinan ini error versi/konflik (bukan package hilang), cek log lengkap di atas."
+            echo "💡 Kemungkinan ini error yang belum dikenali auto-fix, cek log lengkap di atas."
+            exit 1
+          fi
+
+          echo "=== Attempt 2: flutter pub get (setelah auto-fix pubspec) ==="
+          set +e
+          flutter pub get 2>&1 | tee pub_get_log_retry.txt
+          PUB_EXIT_CODE_2=${PIPESTATUS[0]}
+          set -e
+
+          if [ "$PUB_EXIT_CODE_2" -eq 0 ]; then
+            echo "✅ Pub get berhasil setelah auto-fix dependensi!"
+            echo ""
+            echo "--- pubspec.yaml (dependencies) setelah auto-fix ---"
+            sed -n '/^dependencies:/,/^dev_dependencies:/p' pubspec.yaml
+            exit 0
+          else
+            echo ""
+            echo "❌❌❌ PUB GET MASIH GAGAL SETELAH AUTO-FIX ❌❌❌"
+            echo ""
+            echo "=== FULL ERROR LOG (Attempt 2) ==="
+            cat pub_get_log_retry.txt
+            echo ""
+            echo "=== RINGKASAN BARIS ERROR PENTING ==="
+            grep -E "^([Bb]ecause|[Tt]he|>|✗|[Ee]rror)" pub_get_log_retry.txt | sort -u || echo "(tidak ada pola baku yang cocok, lihat FULL LOG di atas)"
+            echo ""
+            echo "💡 pub get tidak selalu bisa diperbaiki otomatis (mis. konflik versi antar-package)."
+            echo "💡 Cek FULL ERROR LOG di atas, atau download artifact 'pub-get-error-log' untuk detail."
             exit 1
           fi
 
@@ -714,7 +740,7 @@ jobs:
           echo "| Key | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
           echo "| Build Type | ${{ steps.build_info.outputs.build_type }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Flutter Version | ${{ github.event.inputs.flutter_version != '' && github.event.inputs.flutter_version || '3.32.8 (default)' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Flutter Version | ${{ github.event.inputs.flutter_version != '' && github.event.inputs.flutter_version || 'stable (latest)' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Run Number | #${{ github.run_number }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Triggered By | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Commit | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
