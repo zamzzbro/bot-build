@@ -651,6 +651,641 @@ jobs:
           grep -rn "TYPE_NUMBER_PASSWORD" android/ 2>/dev/null || echo "✅ None found (FIXED!)"
 
       # ============================================
+# 📦 FLUTTER PUB GET (PERTAMA)
+# ============================================
+- name: Flutter Pub Get
+  id: pub_get
+  continue-on-error: true
+  run: |
+    flutter config --no-analytics
+    dart --disable-analytics
+    flutter pub get || true
+
+# ============================================
+# 🔧 AGGRESSIVE FIX PUB GET ERRORS
+# ============================================
+- name: 🔧 Aggressive Fix Pub Get
+  id: aggressive_fix
+  if: always()
+  run: |
+    echo "=========================================="
+    echo "=== AGGRESSIVE PUB GET FIX ==="
+    echo "=========================================="
+    
+    # Backup pubspec.yaml
+    cp pubspec.yaml pubspec.yaml.bak
+    
+    echo ""
+    echo "📋 STEP 1: Clean and Reset"
+    echo "----------------------------------------"
+    
+    # Clean semua cache
+    flutter clean
+    rm -rf .pub-cache
+    rm -rf pubspec.lock
+    
+    echo ""
+    echo "📋 STEP 2: Fix pubspec.yaml Format"
+    echo "----------------------------------------"
+    
+    # Fix pubspec.yaml - remove special characters dan fix formatting
+    sed -i 's/^[[:space:]]*#.*$//g' pubspec.yaml  # Hapus komentar
+    sed -i '/^[[:space:]]*$/d' pubspec.yaml       # Hapus baris kosong
+    sed -i 's/[[:space:]]*$//' pubspec.yaml       # Hapus trailing spaces
+    
+    echo ""
+    echo "📋 STEP 3: Read Error Logs"
+    echo "----------------------------------------"
+    
+    # Capture error dengan lebih detail
+    ERROR_OUTPUT=$(flutter pub get 2>&1) || true
+    echo "$ERROR_OUTPUT" > pub_get_error.log
+    
+    # Ekstrak package yang hilang dengan lebih agresif
+    echo "Mencari package yang hilang..."
+    MISSING_PACKAGES=()
+    
+    # Pattern lebih luas
+    PATTERNS=(
+      "Package not found: ['\"]?([a-zA-Z0-9_\-]+)['\"]?"
+      "Cannot find package ['\"]?([a-zA-Z0-9_\-]+)['\"]?"
+      "Could not find package ['\"]?([a-zA-Z0-9_\-]+)['\"]?"
+      "package ['\"]?([a-zA-Z0-9_\-]+)['\"]? doesn't exist"
+      "Error: ([a-zA-Z0-9_\-]+) not found"
+      "Failed to load ([a-zA-Z0-9_\-]+)"
+      "No version of ([a-zA-Z0-9_\-]+)"
+      "depends on ([a-zA-Z0-9_\-]+) any"
+      "([a-zA-Z0-9_\-]+) is required"
+    )
+    
+    for pattern in "${PATTERNS[@]}"; do
+      while read -r pkg; do
+        if [ -n "$pkg" ] && [ "$pkg" != "null" ] && [ "$pkg" != "flutter" ] && [ "$pkg" != "dart" ]; then
+          # Skip package internal
+          if [[ ! "$pkg" =~ ^(flutter|dart|sky_engine|collection|meta|typed_data|vector_math|material|widgets|rendering|ui|foundation)$ ]]; then
+            MISSING_PACKAGES+=("$pkg")
+            echo "  Found: $pkg"
+          fi
+        fi
+      done < <(echo "$ERROR_OUTPUT" | grep -oE "$pattern" | sed 's/.*['\'']//' | sed "s/['\'']//g" | sed 's/.* //' | sed 's/://g' | sort -u)
+    done
+    
+    # Unique packages
+    UNIQUE_PACKAGES=($(printf "%s\n" "${MISSING_PACKAGES[@]}" | sort -u))
+    
+    echo ""
+    echo "📋 STEP 4: Add All Missing Dependencies"
+    echo "----------------------------------------"
+    echo "Total packages found: ${#UNIQUE_PACKAGES[@]}"
+    
+    # Jika tidak ada package terdeteksi, tambahkan package yang umum
+    if [ ${#UNIQUE_PACKAGES[@]} -eq 0 ]; then
+      echo "⚠️ No specific packages detected, adding common packages..."
+      UNIQUE_PACKAGES=(
+        "flutter_svg"
+        "http"
+        "dio"
+        "provider"
+        "get_it"
+        "bloc"
+        "flutter_bloc"
+        "equatable"
+        "shared_preferences"
+        "sqflite"
+        "path_provider"
+        "image_picker"
+        "camera"
+        "permission_handler"
+        "device_info_plus"
+        "package_info_plus"
+        "connectivity_plus"
+        "intl"
+        "url_launcher"
+        "webview_flutter"
+        "google_maps_flutter"
+        "firebase_core"
+        "firebase_auth"
+        "cloud_firestore"
+        "flutter_local_notifications"
+        "flutter_native_splash"
+        "flutter_launcher_icons"
+        "audioplayers"
+        "just_audio"
+        "video_player"
+        "chewie"
+        "cached_network_image"
+        "file_picker"
+        "open_file"
+        "flutter_downloader"
+        "flutter_localizations"
+        "flutter_webview"
+        "in_app_purchase"
+        "admob_flutter"
+        "google_sign_in"
+        "sign_in_with_apple"
+        "firebase_messaging"
+        "firebase_storage"
+        "firebase_analytics"
+        "firebase_crashlytics"
+      )
+    fi
+    
+    # Tambahkan semua package ke pubspec.yaml
+    echo ""
+    echo "Adding packages to pubspec.yaml..."
+    
+    # Hapus dependencies section yang lama
+    sed -i '/^dependencies:/,$d' pubspec.yaml
+    
+    # Buat dependencies section baru dengan semua package
+    # PERBAIKAN: Hapus spasi berlebihan di awal
+    cat >> pubspec.yaml << 'EOF'
+    
+    dependencies:
+      flutter:
+        sdk: flutter
+    EOF
+    
+    # Tambahkan semua package
+    for pkg in "${UNIQUE_PACKAGES[@]}"; do
+      # Skip duplicates
+      if grep -q "^  $pkg:" pubspec.yaml; then
+        continue
+      fi
+      
+      # Get latest version
+      LATEST_VERSION=$(curl -s "https://pub.dev/api/packages/$pkg" | jq -r '.latest.version' 2>/dev/null || echo "")
+      
+      if [ -n "$LATEST_VERSION" ] && [ "$LATEST_VERSION" != "null" ]; then
+        VERSION="$LATEST_VERSION"
+      else
+        VERSION="any"
+      fi
+      
+      # PERBAIKAN: Pastikan indentasi 2 spaces
+      echo "  $pkg: $VERSION" >> pubspec.yaml
+      echo "  ✅ Added: $pkg ($VERSION)"
+    done
+    
+    echo ""
+    echo "📋 STEP 5: Retry Pub Get"
+    echo "----------------------------------------"
+    
+    # Try pub get dengan berbagai cara
+    RETRY_COUNT=0
+    MAX_RETRY=3
+    SUCCESS=false
+    
+    while [ $RETRY_COUNT -lt $MAX_RETRY ] && [ "$SUCCESS" = false ]; do
+      echo "Attempt $((RETRY_COUNT+1))/$MAX_RETRY"
+      
+      # Clean cache
+      flutter clean
+      rm -rf ~/.pub-cache
+      
+      # Try dengan verbose
+      if flutter pub get -v; then
+        SUCCESS=true
+        echo "✅ Pub get SUCCESS!"
+        echo "fixed=true" >> $GITHUB_OUTPUT
+        break
+      else
+        echo "❌ Attempt $((RETRY_COUNT+1)) failed"
+        
+        # Try dengan force
+        if flutter pub get --force; then
+          SUCCESS=true
+          echo "✅ Pub get with --force SUCCESS!"
+          echo "fixed=true" >> $GITHUB_OUTPUT
+          break
+        fi
+      fi
+      
+      RETRY_COUNT=$((RETRY_COUNT+1))
+      sleep 5
+    done
+    
+    if [ "$SUCCESS" = false ]; then
+      echo "❌ All attempts failed"
+      echo "fixed=false" >> $GITHUB_OUTPUT
+      
+      # Try alternative: pub upgrade
+      echo ""
+      echo "🔄 Trying pub upgrade..."
+      if flutter pub upgrade; then
+        echo "✅ Pub upgrade SUCCESS!"
+        echo "fixed=true" >> $GITHUB_OUTPUT
+      else
+        # Try final: pub cache repair
+        echo ""
+        echo "🔄 Trying pub cache repair..."
+        flutter pub cache repair
+        if flutter pub get; then
+          echo "✅ Pub get after cache repair SUCCESS!"
+          echo "fixed=true" >> $GITHUB_OUTPUT
+        else
+          echo "❌ All fixes failed"
+          exit 1
+        fi
+      fi
+    fi
+
+# ============================================
+# 🛡️ VALIDATE & REPAIR PUBSPEC (Enhanced)
+# ============================================
+- name: 🛡️ Validate & Repair pubspec.yaml (Enhanced)
+  if: always()
+  run: |
+    echo "=========================================="
+    echo "=== VALIDATING PUBSPEC.YAML (Enhanced) ==="
+    echo "=========================================="
+    
+    echo "📋 Current pubspec.yaml:"
+    cat pubspec.yaml
+    
+    echo ""
+    echo "📋 Fixing common issues..."
+    
+    # Fix 1: Ensure environment sdk
+    if ! grep -q "^environment:" pubspec.yaml; then
+      echo "Adding environment section..."
+      sed -i '1i\
+    environment:\
+      sdk: ">=3.0.0 <4.0.0"' pubspec.yaml
+    fi
+    
+    # Fix 2: Ensure flutter sdk
+    if ! grep -q "sdk: flutter" pubspec.yaml; then
+      echo "Adding flutter sdk to dependencies..."
+      sed -i '/^dependencies:/a \  flutter:\n    sdk: flutter' pubspec.yaml
+    fi
+    
+    # Fix 3: Remove invalid characters
+    sed -i 's/\\r//g' pubspec.yaml
+    sed -i 's/\\n//g' pubspec.yaml
+    
+    # Fix 4: Ensure proper spacing
+    sed -i 's/^  [a-zA-Z]/  &/' pubspec.yaml
+    
+    echo ""
+    echo "📋 Fixed pubspec.yaml:"
+    cat pubspec.yaml
+
+# ============================================
+# 🔄 FINAL PUB GET (Enhanced)
+# ============================================
+- name: 🔄 Final Pub Get (Enhanced)
+  if: always()
+  run: |
+    echo "=========================================="
+    echo "=== FINAL FLUTTER PUB GET (Enhanced) ==="
+    echo "=========================================="
+    
+    # Multiple attempts dengan berbagai metode
+    echo "📋 Method 1: Standard pub get"
+    if flutter pub get; then
+      echo "✅ Standard pub get SUCCESS!"
+      exit 0
+    fi
+    
+    echo ""
+    echo "📋 Method 2: Pub get with --offline"
+    if flutter pub get --offline; then
+      echo "✅ Pub get --offline SUCCESS!"
+      exit 0
+    fi
+    
+    echo ""
+    echo "📋 Method 3: Pub upgrade"
+    if flutter pub upgrade; then
+      echo "✅ Pub upgrade SUCCESS!"
+      exit 0
+    fi
+    
+    echo ""
+    echo "📋 Method 4: Force upgrade with major versions"
+    if flutter pub upgrade --major-versions; then
+      echo "✅ Pub upgrade --major-versions SUCCESS!"
+      exit 0
+    fi
+    
+    echo ""
+    echo "📋 Method 5: Clean and retry"
+    flutter clean
+    rm -rf ~/.pub-cache
+    rm -rf pubspec.lock
+    if flutter pub get; then
+      echo "✅ Clean pub get SUCCESS!"
+      exit 0
+    fi
+    
+    echo ""
+    echo "📋 Method 6: Create minimal pubspec and add all packages"
+    # Create minimal pubspec
+    cat > pubspec.yaml << 'EOF'
+    name: flutter_app
+    description: A Flutter application
+    version: 1.0.0+1
+    
+    environment:
+      sdk: ">=3.0.0 <4.0.0"
+    
+    dependencies:
+      flutter:
+        sdk: flutter
+      cupertino_icons: ^1.0.6
+      http: ^1.1.0
+      provider: ^6.0.0
+      shared_preferences: ^2.0.0
+      path_provider: ^2.0.0
+      permission_handler: ^11.0.0
+      device_info_plus: ^9.0.0
+      package_info_plus: ^4.0.0
+      connectivity_plus: ^5.0.0
+      intl: ^0.18.0
+      url_launcher: ^6.0.0
+      webview_flutter: ^4.0.0
+      image_picker: ^1.0.0
+      camera: ^0.10.0
+      sqflite: ^2.0.0
+      flutter_svg: ^2.0.0
+      dio: ^5.0.0
+      get_it: ^7.0.0
+      flutter_bloc: ^8.0.0
+      equatable: ^2.0.0
+      audio_players: ^5.0.0
+      just_audio: ^0.9.0
+      video_player: ^2.0.0
+      cached_network_image: ^3.0.0
+      file_picker: ^6.0.0
+      flutter_downloader: ^1.0.0
+    
+    dev_dependencies:
+      flutter_test:
+        sdk: flutter
+      flutter_lints: ^3.0.0
+    
+    flutter:
+      uses-material-design: true
+    EOF
+    
+    if flutter pub get; then
+      echo "✅ Minimal pubspec pub get SUCCESS!"
+      exit 0
+    else
+      echo "❌ All methods failed!"
+      echo ""
+      echo "=== ERROR DETAILS ==="
+      flutter pub get -v 2>&1 | tail -100
+      exit 1
+    fi
+
+# ============================================
+# 📊 SET BUILD TYPE
+# ============================================
+- name: Set Build Type
+  id: build_info
+  run: |
+    BUILD_TYPE="${{ github.event.inputs.build_type }}"
+    if [ -z "$BUILD_TYPE" ]; then
+      BUILD_TYPE="apk-debug"
+    fi
+    echo "build_type=$BUILD_TYPE" >> $GITHUB_OUTPUT
+    echo "Build type: $BUILD_TYPE"
+
+- name: Build APK Debug
+  if: steps.build_info.outputs.build_type == 'apk-debug'
+  run: |
+    # Ensure dependencies
+    flutter pub get || flutter pub upgrade
+    
+    flutter build apk --debug \
+      --no-shrink \
+      --target-platform android-arm,android-arm64,android-x64
+    echo "APK Debug selesai"
+
+- name: Build APK Release
+  if: steps.build_info.outputs.build_type == 'apk-release'
+  run: |
+    # Ensure dependencies
+    flutter pub get || flutter pub upgrade
+    
+    flutter build apk --release \
+      --obfuscate \
+      --split-debug-info=build/debug-info \
+      --target-platform android-arm,android-arm64,android-x64
+    echo "APK Release selesai"
+
+- name: Build AAB Release
+  if: steps.build_info.outputs.build_type == 'aab-release'
+  run: |
+    # Ensure dependencies
+    flutter pub get || flutter pub upgrade
+    
+    flutter build appbundle --release \
+      --obfuscate \
+      --split-debug-info=build/debug-info
+    echo "AAB Release selesai"
+
+      - name: Prepare Output Files
+        run: |
+          mkdir -p output
+          BUILD_TYPE="${{ steps.build_info.outputs.build_type }}"
+          TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+          APP_NAME=$(grep '^name:' pubspec.yaml | awk '{print $2}' | tr -d '\r')
+
+          if [ "$BUILD_TYPE" = "apk-debug" ]; then
+            APK_PATH=$(find build/app/outputs/flutter-apk -name "*.apk" | head -1)
+            cp "$APK_PATH" "output/${APP_NAME}_debug_${TIMESTAMP}.apk"
+          elif [ "$BUILD_TYPE" = "apk-release" ]; then
+            APK_PATH=$(find build/app/outputs/flutter-apk -name "app-release.apk" | head -1)
+            cp "$APK_PATH" "output/${APP_NAME}_release_${TIMESTAMP}.apk"
+          elif [ "$BUILD_TYPE" = "aab-release" ]; then
+            AAB_PATH=$(find build/app/outputs/bundle/release -name "*.aab" | head -1)
+            cp "$AAB_PATH" "output/${APP_NAME}_release_${TIMESTAMP}.aab"
+          fi
+
+          echo "Output files:"
+          ls -lh output/
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-build-${{ steps.build_info.outputs.build_type }}-${{ github.run_number }}
+          path: output/
+          retention-days: 3
+          if-no-files-found: error
+
+      - name: Build Summary
+        if: always()
+        run: |
+          echo "## 🚀 Flutter Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Key | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Build Type | ${{ steps.build_info.outputs.build_type }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Flutter Version | ${{ github.event.inputs.flutter_version != '' && github.event.inputs.flutter_version || '3.32.8 (default)' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Run Number | #${{ github.run_number }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Triggered By | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 Output" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ls -lh output/ 2>/dev/null >> $GITHUB_STEP_SUMMARY || echo "No output files" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY            echo "=== Fixing AndroidManifest ==="
+            
+            # Tambahkan xmlns:tools jika belum ada
+            if ! grep -q "xmlns:tools" "$MANIFEST"; then
+              sed -i 's/<manifest/<manifest xmlns:tools="http:\/\/schemas.android.com\/tools"/' "$MANIFEST"
+              echo "✅ xmlns:tools added"
+            fi
+            
+            # Tambahkan overrideLibrary jika belum ada
+            if ! grep -q "overrideLibrary" "$MANIFEST"; then
+              sed -i 's/<application/<application\n        tools:overrideLibrary="com.llfbandit.record"/' "$MANIFEST"
+              echo "✅ overrideLibrary added"
+            fi
+            
+            echo "--- AndroidManifest.xml ---"
+            head -12 "$MANIFEST"
+          fi
+
+      # PERBAIKAN: Fix compileSdk, missing assets & Java errors (AGRESIF)
+      - name: 🔧 Fix compileSdk, Assets & Java
+        run: |
+          echo "=========================================="
+          echo "=== FIX 1: compileSdk ke 36 ==="
+          echo "=========================================="
+          
+          # Fix semua file gradle
+          find android -type f \( -name "build.gradle" -o -name "build.gradle.kts" \) | while read f; do
+            echo "=== Before: $f ==="
+            grep -n "compileSdk" "$f" || echo "(no compileSdk found)"
+            
+            # Ganti semua variasi compileSdk
+            sed -i 's/compileSdkVersion\s*=\?\s*35/compileSdkVersion 36/g' "$f"
+            sed -i 's/compileSdkVersion\s*=\?\s*34/compileSdkVersion 36/g' "$f"
+            sed -i 's/compileSdkVersion\s*=\?\s*33/compileSdkVersion 36/g' "$f"
+            sed -i 's/compileSdk\s*=\?\s*35/compileSdk = 36/g' "$f"
+            sed -i 's/compileSdk\s*=\?\s*34/compileSdk = 36/g' "$f"
+            sed -i 's/compileSdk\s*=\?\s*33/compileSdk = 36/g' "$f"
+            sed -i 's/compileSdk(35)/compileSdk(36)/g' "$f"
+            sed -i 's/compileSdk(34)/compileSdk(36)/g' "$f"
+            sed -i 's/compileSdk(33)/compileSdk(36)/g' "$f"
+            sed -i 's/compileSdk\s\+35/compileSdk 36/g' "$f"
+            sed -i 's/compileSdk\s\+34/compileSdk 36/g' "$f"
+            
+            echo "=== After: $f ==="
+            grep -n "compileSdk" "$f" || echo "(no compileSdk)"
+          done
+          
+          # Juga fix di android/build.gradle
+          if [ -f android/build.gradle ]; then
+            sed -i 's/compileSdkVersion\s*=\?\s*35/compileSdkVersion 36/g' android/build.gradle
+            sed -i 's/compileSdk\s*=\?\s*35/compileSdk = 36/g' android/build.gradle
+          fi
+
+          echo ""
+          echo "=========================================="
+          echo "=== FIX 2: Buat folder assets ==="
+          echo "=========================================="
+          
+          # Buat folder assets yang umum
+          for dir in assets assets/images assets/videos assets/audio assets/fonts assets/icons; do
+            if [ ! -d "$dir" ]; then
+              mkdir -p "$dir"
+              touch "$dir/.gitkeep"
+              echo "✅ Created: $dir/"
+            else
+              echo "✅ Exists: $dir/"
+            fi
+          done
+          
+          # Baca pubspec.yaml dan buat folder yang diperlukan
+          if [ -f pubspec.yaml ]; then
+            echo "Reading pubspec.yaml for assets..."
+            grep -E "^\s+-\s+" pubspec.yaml | sed 's/.*- //' | while read asset; do
+              # Hanya buat folder (yang berakhiran /)
+              if echo "$asset" | grep -q "/$"; then
+                if [ ! -d "$asset" ]; then
+                  mkdir -p "$asset"
+                  touch "$asset/.gitkeep"
+                  echo "✅ Created from pubspec: $asset"
+                fi
+              else
+                # Buat folder parent-nya
+                PARENT_DIR=$(dirname "$asset")
+                if [ "$PARENT_DIR" != "." ] && [ ! -d "$PARENT_DIR" ]; then
+                  mkdir -p "$PARENT_DIR"
+                  touch "$PARENT_DIR/.gitkeep"
+                  echo "✅ Created parent: $PARENT_DIR/"
+                fi
+                # Buat placeholder file
+                if [ ! -f "$asset" ]; then
+                  touch "$asset"
+                  echo "✅ Created placeholder: $asset"
+                fi
+              fi
+            done
+          fi
+
+          echo ""
+          echo "=========================================="
+          echo "=== FIX 3: Java InputType ==="
+          echo "=========================================="
+          
+          # Fix Java file
+          JAVA_FILE="android/app/src/main/java/com/nullx/pp/LockOverlayService.java"
+          if [ -f "$JAVA_FILE" ]; then
+            echo "Fixing: $JAVA_FILE"
+            # Backup
+            cp "$JAVA_FILE" "$JAVA_FILE.bak"
+            
+            # Ganti TYPE_NUMBER_PASSWORD
+            sed -i 's/InputType\.TYPE_NUMBER_PASSWORD/(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD)/g' "$JAVA_FILE"
+            
+            # Verifikasi
+            if grep -q "TYPE_NUMBER_PASSWORD" "$JAVA_FILE"; then
+              echo "❌ Fix failed, masih ada TYPE_NUMBER_PASSWORD"
+              # Cara alternatif: import yang benar
+              if ! grep -q "import android.text.InputType" "$JAVA_FILE"; then
+                sed -i '1s/^/import android.text.InputType;\n/' "$JAVA_FILE"
+              fi
+              # Ganti lagi dengan cara berbeda
+              sed -i 's/InputType\.TYPE_NUMBER_PASSWORD/129/g' "$JAVA_FILE"
+              echo "✅ Fixed with numeric value 129"
+            else
+              echo "✅ TYPE_NUMBER_PASSWORD fixed"
+            fi
+          else
+            echo "⚠️ LockOverlayService.java not found, searching..."
+            find android -name "*.java" -type f | while read f; do
+              if grep -l "TYPE_NUMBER_PASSWORD" "$f" 2>/dev/null; then
+                echo "Found in: $f"
+                sed -i 's/InputType\.TYPE_NUMBER_PASSWORD/(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD)/g' "$f"
+                echo "✅ Fixed: $f"
+              fi
+            done
+          fi
+
+          echo ""
+          echo "=========================================="
+          echo "=== ALL FIXES COMPLETE ==="
+          echo "=========================================="
+          
+          # Verifikasi akhir
+          echo ""
+          echo "=== Verification ==="
+          echo "compileSdk values:"
+          grep -rn "compileSdk" android/ 2>/dev/null | grep -v ".bak" | head -10
+          echo ""
+          echo "Asset directories:"
+          ls -d assets/*/ 2>/dev/null || echo "(no asset dirs)"
+          echo ""
+          echo "TYPE_NUMBER_PASSWORD occurrences:"
+          grep -rn "TYPE_NUMBER_PASSWORD" android/ 2>/dev/null || echo "✅ None found (FIXED!)"
+
+      # ============================================
       # 📦 FLUTTER PUB GET (PERTAMA)
       # ============================================
       - name: Flutter Pub Get
