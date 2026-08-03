@@ -20,7 +20,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout repo (butuh folder android-template)
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
@@ -29,129 +29,71 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install Bubblewrap CLI
-        run: npm install -g @bubblewrap/cli
-
-      - name: Generate Package ID from URL
+      - name: Generate package name unik
         id: pkg
         run: |
-          URL="${{ github.event.inputs.web_url }}"
+          SANITIZED=$(echo "${{ inputs.app_name }}" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9' | cut -c1-20)
+          if [ -z "$SANITIZED" ]; then SANITIZED="app"; fi
+          TS=$(date +%s)
+          echo "package_id=com.web2apk.${SANITIZED}_${TS}" >> "$GITHUB_OUTPUT"
 
-          # Hapus protokol (http://, https://)
-          HOST=$(echo "$URL" | sed -E 's~^[a-zA-Z]+://~~')
+      - name: Copy template ke folder build
+        run: cp -r android-template build-project
 
-          # Hapus path/query setelah domain
-          HOST=$(echo "$HOST" | cut -d'/' -f1)
-
-          # Hapus www.
-          HOST=$(echo "$HOST" | sed -E 's/^www\.//')
-
-          # Hitung jumlah bagian domain (dipisah titik)
-          PARTS=$(echo "$HOST" | tr '.' '\n' | wc -l)
-
-          if [ "$PARTS" -ge 2 ]; then
-            # Ambil bagian kedua dari belakang sebagai nama utama
-            NAME=$(echo "$HOST" | awk -F'.' '{print $(NF-1)}')
-          else
-            NAME="$HOST"
-          fi
-
-          # Sanitasi: lowercase, hanya huruf/angka
-          NAME=$(echo "$NAME" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]//g')
-
-          # Fallback jika kosong
-          if [ -z "$NAME" ]; then
-            NAME="app"
-          fi
-
-          PACKAGE_ID="com.${NAME}.app"
-          echo "Generated Package ID: $PACKAGE_ID"
-          echo "package_id=$PACKAGE_ID" >> $GITHUB_OUTPUT
-
-      - name: Download Icon
+      - name: Update nama aplikasi (strings.xml)
         run: |
-          mkdir -p /home/runner/work/icon
-          curl -L "${{ github.event.inputs.icon_url }}" -o /home/runner/work/icon/icon.png
+          sed -i "s|<string name=\"app_name\">.*</string>|<string name=\"app_name\">${{ inputs.app_name }}</string>|" \
+            build-project/app/src/main/res/values/strings.xml
 
-      - name: Resize Icon to 512x512
+      - name: Inject Web URL ke MainActivity (encode sama seperti projectGenerator.js)
         run: |
-          sudo apt-get update
+          ENCODED=$(printf '%s' "${{ inputs.web_url }}" | rev | base64 -w0)
+          sed -i "s|private static final String ENCODED_URL = \".*\";|private static final String ENCODED_URL = \"$ENCODED\";|" \
+            build-project/app/src/main/java/com/web2apk/app/MainActivity.java
+          sed -i "s|private static final String FALLBACK_URL = \".*\";|private static final String FALLBACK_URL = \"${{ inputs.web_url }}\";|" \
+            build-project/app/src/main/java/com/web2apk/app/MainActivity.java
+
+      - name: Update package name (build.gradle + Java files)
+        run: |
+          PKG="${{ steps.pkg.outputs.package_id }}"
+          sed -i "s|applicationId \".*\"|applicationId \"$PKG\"|" build-project/app/build.gradle
+          sed -i "s|namespace '.*'|namespace '$PKG'|" build-project/app/build.gradle
+          find build-project/app/src/main/java/com/web2apk/app -name "*.java" \
+            -exec sed -i "s|package com.web2apk.app;|package $PKG;|" {} \;
+
+      - name: Download & resize icon jadi semua density
+        run: |
+          sudo apt-get update -y
           sudo apt-get install -y imagemagick
-          convert /home/runner/work/icon/icon.png -resize 512x512! /home/runner/work/icon/icon-512.png
+          curl -L "${{ inputs.icon_url }}" -o icon-src.png
+          declare -A sizes=( [mdpi]=48 [hdpi]=72 [xhdpi]=96 [xxhdpi]=144 [xxxhdpi]=192 )
+          for name in "${!sizes[@]}"; do
+            size="${sizes[$name]}"
+            dir="build-project/app/src/main/res/mipmap-$name"
+            mkdir -p "$dir"
+            convert icon-src.png -resize "${size}x${size}!" "$dir/ic_launcher.png"
+            cp "$dir/ic_launcher.png" "$dir/ic_launcher_round.png"
+          done
 
-      - name: Install JDK for Bubblewrap
+      - name: Set izin eksekusi gradlew
+        run: chmod +x build-project/gradlew
+
+      - name: Build APK (debug, sama seperti apkBuilder.js lokal)
+        working-directory: build-project
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Cari & rename hasil APK
         run: |
-          echo "JAVA_HOME=$JAVA_HOME" >> $GITHUB_ENV
+          APK_PATH=$(find build-project/app/build/outputs/apk -name "*.apk" | head -n 1)
+          if [ -z "$APK_PATH" ]; then
+            echo "❌ APK tidak ditemukan, build gagal."
+            exit 1
+          fi
+          SAFE_NAME=$(echo "${{ inputs.app_name }}" | tr -cd 'a-zA-Z0-9_-')
+          cp "$APK_PATH" "${SAFE_NAME:-app}.apk"
 
-      - name: Init Bubblewrap Project
-        run: |
-          mkdir -p twa-project
-          cd twa-project
-          bubblewrap init --manifest="${{ github.event.inputs.web_url }}/manifest.json" \
-            --directory=. \
-            --name="${{ github.event.inputs.app_name }}" \
-            --packageId="${{ steps.pkg.outputs.package_id }}" \
-            --iconUrl="${{ github.event.inputs.icon_url }}" \
-            --skipPwaValidation || true
-
-      - name: Generate TWA Manually (fallback)
-        run: |
-          cd twa-project
-          cat > twa-manifest.json << EOF
-          {
-            "packageId": "${{ steps.pkg.outputs.package_id }}",
-            "host": "${{ github.event.inputs.web_url }}",
-            "name": "${{ github.event.inputs.app_name }}",
-            "launcherName": "${{ github.event.inputs.app_name }}",
-            "display": "standalone",
-            "themeColor": "#FFFFFF",
-            "navigationColor": "#000000",
-            "backgroundColor": "#FFFFFF",
-            "enableNotifications": true,
-            "startUrl": "${{ github.event.inputs.web_url }}",
-            "iconUrl": "${{ github.event.inputs.icon_url }}",
-            "maskableIconUrl": "${{ github.event.inputs.icon_url }}",
-            "shortcuts": [],
-            "generatorApp": "bubblewrap-cli",
-            "webManifestUrl": "${{ github.event.inputs.web_url }}/manifest.json",
-            "fallbackType": "customtabs",
-            "features": {},
-            "alphaDependencies": {
-              "enabled": false
-            },
-            "enableSiteSettingsShortcut": true,
-            "isChromeOSOnly": false,
-            "isMetaQuest": false,
-            "fullScopeUrl": "${{ github.event.inputs.web_url }}",
-            "minSdkVersion": 21,
-            "orientation": "default",
-            "fingerprints": [],
-            "additionalTrustedOrigins": [],
-            "retainedBundles": [],
-            "appVersion": "1.0.0",
-            "appVersionCode": 1,
-            "shareTarget": null,
-            "protocolHandlers": [],
-            "generatedAt": "auto"
-          }
-          EOF
-
-      - name: Build APK with Bubblewrap
-        run: |
-          cd twa-project
-          bubblewrap build --skipPwaValidation
-
-      - name: Rename Output APK
-        run: |
-          find . -name "*.apk" -exec cp {} "${{ github.event.inputs.app_name }}.apk" \;
-
-      - name: Upload APK Artifact
+      - name: Upload APK sebagai artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ github.event.inputs.app_name }}-apk
-          path: '**/*.apk'
+          name: ${{ inputs.app_name }}-apk
+          path: '*.apk'
